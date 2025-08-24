@@ -24,7 +24,7 @@
       },
       "package": "expo.modules.universaltooltip.example"
     },
-    "web": { "favicon": "./assets/favicon.png" },
+    "web": { "favicon": "./assets/favicon.png", "bundler": "metro" },
     "plugins": [
       [
         "expo-build-properties",
