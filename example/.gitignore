@@ -11,3 +11,8 @@ web-build/
 
 # macOS
 .DS_Store
+
+# Expo
+.expo
+dist/
+web-build/

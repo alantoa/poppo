@@ -39,8 +39,8 @@
     "prettier": "^3.0.2",
     "release-it": "^16.1.5",
     "rimraf": "^5.0.1",
-    "expo-module-scripts": "^3.5.1",
-    "expo-modules-core": "^1.12.10"
+    "expo-module-scripts": "4.1.10",
+    "expo-modules-core": "2.5.0"
   },
   "peerDependencies": {
     "@radix-ui/react-popover": "*",

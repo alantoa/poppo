@@ -11,9 +11,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "updates": {
-      "fallbackToCacheTimeout": 0
-    },
+    "updates": { "fallbackToCacheTimeout": 0 },
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
@@ -26,28 +24,22 @@
       },
       "package": "expo.modules.universaltooltip.example"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
+    "web": { "favicon": "./assets/favicon.png" },
     "plugins": [
       [
         "expo-build-properties",
         {
           "ios": {
             "useFrameworks": "static",
-            "deploymentTarget": "14.1",
-            "unstable_networkInspector": true,
-            "newArchEnabled": true
+            "deploymentTarget": "15.1",
+            "unstable_networkInspector": true
           },
-
           "android": {
-            "compileSdkVersion": 34,
-            "targetSdkVersion": 34,
-            "minSdkVersion": 24,
-            "buildToolsVersion": "34.0.0",
-            "kotlinVersion": "1.8.0",
-            "unstable_networkInspector": true,
-            "newArchEnabled": true
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "minSdkVersion": 25,
+            "buildToolsVersion": "35.0.0",
+            "unstable_networkInspector": true
           }
         }
       ]

@@ -3,7 +3,7 @@ import type {
   TooltipContentProps,
   TooltipTriggerProps,
   TooltipPortalProps,
-  PopperArrowProps,
+  TooltipArrowProps
 } from "@radix-ui/react-tooltip";
 import React from "react";
 import type { TextStyle, ViewProps } from "react-native";
@@ -36,7 +36,7 @@ export type ContentProps = ViewProps &
       paddingLeft?: number;
     };
   };
-export type ArrowProps = PopperArrowProps & {
+export type ArrowProps = TooltipArrowProps & {
   backgroundColor?: string;
 };
 
