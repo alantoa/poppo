@@ -11,7 +11,7 @@ import {
   ArrowProps,
 } from "./universal-tooltip.types";
 import { createComponent } from "./utils/create-components";
-import { pickChild } from "./utils/pick-child";
+import { pickChildren } from "./utils/pick-children";
 
 const NativeView: React.ComponentType<UniversalTooltipViewProps> =
   requireNativeViewManager("UniversalTooltip");
@@ -23,11 +23,13 @@ export const Trigger = createComponent(({ children }: TriggerProps) => {
 }, "Trigger");
 
 export const Root = createComponent(({ children, ...rest }: RootProps) => {
-  const [withoutTriggerChildren, triggerChildren] = pickChild(
+  const [withoutTriggerChildren, triggerChildren] = pickChildren(
     children,
     Trigger,
   );
-  const content = withoutTriggerChildren?.[0];
+  const content = Array.isArray(withoutTriggerChildren)
+    ? withoutTriggerChildren[0]
+    : withoutTriggerChildren;
   const contentProps =
     content.type === Content ? content?.props : content?.props?.children?.props;
   const {
@@ -35,13 +37,13 @@ export const Root = createComponent(({ children, ...rest }: RootProps) => {
     backgroundColor,
     ...contentRestProps
   } = contentProps;
-  const [, textChildren] = pickChild(contentChild, Text);
+  const [, textChildren] = pickChildren(contentChild, Text);
   const text = textChildren?.[0];
   const { style: textStyle, ...textProps } = text?.props ?? {};
-  const [, arrowChildren] = pickChild(contentChild, Arrow);
+  const [, arrowChildren] = pickChildren(contentChild, Arrow);
   const arrow = arrowChildren?.[0];
   const { width: arrowWidth, height: arrowHeight } = arrow?.props ?? {};
-
+  console.log("textProps", textProps);
   return (
     <NativeView
       backgroundColor={processColor(backgroundColor)}
@@ -66,7 +68,7 @@ export const Content = createComponent<ContentProps>(
     if (children && (children as JSX.Element[])?.length > 1) {
       return (
         <View style={[style, StyleSheet.absoluteFillObject]} {...rest}>
-          {children[0]}
+          {Array.isArray(children) ? children[0] : children}
         </View>
       );
     }

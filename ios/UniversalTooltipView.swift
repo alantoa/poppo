@@ -77,7 +77,7 @@ class UniversalTooltipView: ExpoView {
 //  }
   
   override func didUpdateReactSubviews() {
-    let firstView = self.reactSubviews()[0] as! RCTView
+    let firstView = self.reactSubviews()[0]
     contentView = firstView
     for index in 1..<self.reactSubviews().count {
       let subView = self.reactSubviews()[index]
@@ -116,7 +116,7 @@ class UniversalTooltipView: ExpoView {
   var body: some View {
     Group {
       if let validContentView = contentView {
-        if let firstSubview = (validContentView as? RCTView)?.reactSubviews()?.first {
+        if let firstSubview = validContentView.reactSubviews()?.first {
           RepresentedUIView(contentView: validContentView)
             .frame(width: firstSubview.frame.width, height: firstSubview.frame.height)
             .background(
