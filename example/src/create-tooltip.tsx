@@ -57,8 +57,20 @@ export const CreateTooltip = ({
           {children ? (
             children
           ) : (
-            <View className="h-8 bg-black border border-gray-100 justify-center items-center rounded-md px-2 cursor-pointer">
-              <Text className="text-sm text-white">{title ?? text}</Text>
+            <View
+              style={{
+                backgroundColor: "black",
+                borderColor: "#gray-100",
+                justifyContent: "center",
+                alignItems: "center",
+                borderRadius: 4,
+                paddingHorizontal: 2,
+                cursor: "pointer",
+              }}
+            >
+              <Text style={{ fontSize: 12, color: "white" }}>
+                {title ?? text}
+              </Text>
             </View>
           )}
         </TriggerView>

@@ -18,7 +18,7 @@ import {
   ArrowProps,
 } from "./universal-tooltip.types";
 import "./styles.css";
-import { pickChild } from "./utils/pick-child";
+import { pickChildren } from "./utils/pick-children";
 
 export const TooltipContext = createContext<{ usePopover: boolean }>({
   usePopover: false,
@@ -92,7 +92,7 @@ export const Content = forwardRef<any, ContentProps>(
       ...restProps
     } = rest;
     const { usePopover } = useContext(TooltipContext);
-    const [, triggerChildren] = pickChild(children, Text);
+    const [, triggerChildren] = pickChildren(children, Text);
     const TooltipContent = usePopover ? Popover.Content : Tooltip.Content;
 
     const animationClass = useMemo(() => {

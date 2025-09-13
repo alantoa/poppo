@@ -31,16 +31,15 @@
   "license": "MIT",
   "homepage": "https://github.com/alantoa/universal-tooltip#readme",
   "devDependencies": {
-    "@radix-ui/react-popover": "^1.0.6",
-    "@radix-ui/react-tooltip": "^1.0.6",
+    "@radix-ui/react-popover": "^1.0.7",
+    "@radix-ui/react-tooltip": "^1.0.7",
     "@types/react": "^18.2.21",
     "@types/react-native": "^0.72.2",
     "eslint": "^8.31.0",
     "prettier": "^3.0.2",
     "release-it": "^16.1.5",
     "rimraf": "^5.0.1",
-    "expo-module-scripts": "^3.4.0",
-    "expo-modules-core": "^1.11.2"
+    "expo-module-scripts": "5.0.7"
   },
   "peerDependencies": {
     "@radix-ui/react-popover": "*",

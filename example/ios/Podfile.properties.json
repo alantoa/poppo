@@ -1,6 +1,7 @@
 {
   "expo.jsEngine": "hermes",
   "EX_DEV_CLIENT_NETWORK_INSPECTOR": "true",
-  "ios.deploymentTarget": "14.1",
-  "ios.useFrameworks": "static"
+  "ios.deploymentTarget": "15.1",
+  "ios.useFrameworks": "static",
+  "apple.privacyManifestAggregationEnabled": "true"
 }
