@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import React
 
 import Popovers
 import SwiftUI
