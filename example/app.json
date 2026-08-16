@@ -5,7 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -14,10 +15,15 @@
     "updates": {
       "fallbackToCacheTimeout": 0
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "expo.modules.universaltooltip.example"
+      "bundleIdentifier": "expo.modules.universaltooltip.example",
+      "infoPlist": {
+        "NSSupportsLiveActivities": true
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -27,28 +33,12 @@
       "package": "expo.modules.universaltooltip.example"
     },
     "web": {
+      "bundler": "metro",
+      "output": "single",
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "useFrameworks": "static",
-            "deploymentTarget": "14.1",
-            "unstable_networkInspector": true
-          },
-
-          "android": {
-            "compileSdkVersion": 34,
-            "targetSdkVersion": 34,
-            "minSdkVersion": 24,
-            "buildToolsVersion": "34.0.0",
-            "kotlinVersion": "1.8.0",
-            "unstable_networkInspector": true
-          }
-        }
-      ]
+      "@bacons/apple-targets"
     ]
   }
 }

@@ -1,5 +1,6 @@
-// Learn more https://docs.expo.io/guides/customizing-metro
+// Learn more https://docs.expo.dev/guides/customizing-metro
 const { getDefaultConfig } = require("expo/metro-config");
+const { withNativeWind } = require("nativewind/metro");
 const path = require("path");
 
 const config = getDefaultConfig(__dirname);
@@ -24,11 +25,4 @@ config.resolver.extraNodeModules = {
 
 config.watchFolders = [path.resolve(__dirname, "..")];
 
-config.transformer.getTransformOptions = async () => ({
-  transform: {
-    experimentalImportSupport: false,
-    inlineRequires: true,
-  },
-});
-
-module.exports = config;
+module.exports = withNativeWind(config, { input: "./src/input.css" });
