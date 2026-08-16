@@ -31,32 +31,32 @@
   "license": "MIT",
   "homepage": "https://github.com/alantoa/universal-tooltip#readme",
   "devDependencies": {
-    "@radix-ui/react-popover": "^1.0.6",
-    "@radix-ui/react-tooltip": "^1.0.6",
-    "@types/react": "^18.2.21",
-    "@types/react-native": "^0.72.2",
-    "eslint": "^8.31.0",
-    "prettier": "^3.0.2",
-    "release-it": "^16.1.5",
-    "rimraf": "^5.0.1",
-    "expo-module-scripts": "^3.4.0",
-    "expo-modules-core": "^1.11.2"
+    "@base-ui/react": "^1.7.0",
+    "@types/react": "~19.2.18",
+    "eslint": "^8.57.1",
+    "prettier": "^3.6.2",
+    "release-it": "^21.0.1",
+    "rimraf": "^6.0.1",
+    "expo-module-scripts": "^56.0.3",
+    "expo-modules-core": "~57.0.10",
+    "react": "19.2.0",
+    "react-native": "0.86.2",
+    "typescript": "~5.9.2"
   },
   "peerDependencies": {
-    "@radix-ui/react-popover": "*",
-    "@radix-ui/react-tooltip": "*",
+    "@base-ui/react": "*",
     "expo": "*",
     "react": "*",
     "react-native": "*"
   },
   "resolutions": {
-    "typescript": "^5.3.0",
-    "@types/react-native": "^0.72.2",
-    "@types/react": "~18.2.45"
+    "typescript": "~5.9.2",
+    "@types/react": "~19.2.18"
   },
   "release-it": {
     "github": {
       "release": true
     }
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

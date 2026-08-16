@@ -16,7 +16,32 @@
 
 ## What
 
-This is a pure and simple native tooltip component that supports fadeIn and zoomIn preset animations.
+Anchored-popup **primitives** for React Native and web — one repo, three components with Base UI-shaped APIs:
+
+- **`Tooltip`** — hover (web) / press (native) opened, for hints.
+- **`Popover`** — click/press opened, for interactive content (buttons inside work on every platform).
+- **`Toast`** — imperative notifications with a manager, provider and unstyled parts.
+
+```tsx
+import { Tooltip, Popover, Toast, useToastManager } from "universal-tooltip";
+
+// Tooltip / Popover share the same part structure (Base UI style):
+<Tooltip.Root>
+  <Tooltip.Trigger>...</Tooltip.Trigger>
+  <Tooltip.Portal>
+    <Tooltip.Positioner side="top" sideOffset={4}>
+      <Tooltip.Popup style={{ backgroundColor: "#363A3E", borderRadius: 12, padding: 12, color: "#fff" }}>
+        Plain text popups are rendered natively
+        <Tooltip.Arrow width={19} height={12} />
+      </Tooltip.Popup>
+    </Tooltip.Positioner>
+  </Tooltip.Portal>
+</Tooltip.Root>
+
+// Toast (Base UI-shaped manager API):
+const toast = useToastManager();
+toast.add({ title: "Saved", description: "Your booking was updated" });
+```
 
 🍎 On iOS:
 
@@ -28,11 +53,11 @@ This is a pure and simple native tooltip component that supports fadeIn and zoom
 
 🌐 On Web:
 
-- This component wraps [`@radix-ui/react-popover`](https://www.radix-ui.com/docs/primitives/components/popover) for mobile use.
+- This component wraps [Base UI](https://base-ui.com)'s [`Popover`](https://base-ui.com/react/components/popover) for mobile use (pass `usePopover` to `Root`).
 
-- This component wraps [`@radix-ui/react-tooltip`](https://www.radix-ui.com/docs/primitives/components/popover) for desktop use.
+- This component wraps [Base UI](https://base-ui.com)'s [`Tooltip`](https://base-ui.com/react/components/tooltip) for desktop use.
 
-> Please note that the @radix-ui/react-tooltip component from Radix only works on desktop, as per [this thread](https://github.com/radix-ui/primitives/issues/955#issuecomment-960610209).
+> Please note that hover-based tooltips only work on devices with a pointer — on touch devices, pass `usePopover` to `Root` to switch to the tap-triggered popover behavior.
 
 ## Usage
 
@@ -100,7 +125,46 @@ const [open, setOpen] = useState(false);
 
 ## API
 
-This component's API basically same as the [`@radix-ui/react-tooltip`](https://www.radix-ui.com/docs/primitives/components/popover) component, but there are some differences on native.
+This component's API is close to [Base UI's Tooltip](https://base-ui.com/react/components/tooltip) component, but there are some differences on native.
+
+### Styling
+
+Style the tooltip exactly like React Native's `<View>` and `<Text>`:
+
+```tsx
+<Tooltip.Content
+  side="top"
+  style={{
+    backgroundColor: "rgba(54,58,62,0.85)",
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    maxWidth: 240,
+  }}
+>
+  <Tooltip.Text
+    text="Drag to reschedule"
+    style={{ fontSize: 14, lineHeight: 21, color: "#fff" }}
+  />
+  <Tooltip.Arrow width={19} height={12} />
+</Tooltip.Content>
+```
+
+- The arrow color is derived from the content's `style.backgroundColor` automatically.
+- On web every `ViewStyle`/`TextStyle` property works as-is.
+- On iOS/Android, text tooltips are rendered by the native bubble, which reads
+  `backgroundColor`, `borderRadius`, `padding*`, `width`/`maxWidth` from the
+  content `style` and `fontSize`, `color`, `fontWeight`, `fontFamily` from the
+  text `style`. Custom views (any non-`Tooltip.Text` children) are rendered by
+  React Native itself — give them an explicit size and every style works.
+- The legacy `backgroundColor` / `borderRadius` / `maxWidth` / `containerStyle`
+  props keep working but are deprecated in favor of `style`.
+
+### Interactive content
+
+Custom views inside the tooltip are fully interactive on all platforms — `onPress`, gestures, and text inputs work inside the bubble. On native this is powered by the same mechanism React Native's `Modal` uses (`RCTSurfaceTouchHandler` on iOS, a `RootView` + `JSTouchDispatcher` host on Android), since the tooltip is rendered in a native window outside the React root view.
+
+> If your app enables Metro's `inlineRequires` transform, Base UI's module-level side effects can be deferred in a way that triggers a recoverable React error on first render. Prefer leaving `inlineRequires` off for web builds (the Expo default config already handles this).
 
 ## Installation
 
@@ -111,28 +175,16 @@ yarn add universal-tooltip
 ### Expo
 
 ```sh
-expo install universal-tooltip expo-build-properties
+npx expo install universal-tooltip
 ```
 
-To use this component, you need to add the expo-build-properties plugin to your app.json or app.config.js and ensure that your compileSdkVersion >= 32 as required by the [Ballon lib](https://github.com/skydoves/Balloon). An example configuration might look like this:
+If you render tooltips on web, also install the web peer dependency:
 
-```json
-[
-  "expo-build-properties",
-  {
-    "android": {
-      "compileSdkVersion": 32,
-      "targetSdkVersion": 32,
-      "minSdkVersion": 23,
-      "buildToolsVersion": "32.0.0",
-      "kotlinVersion": "1.6.10"
-    },
-    "ios": {
-      "deploymentTarget": "13.0"
-    }
-  }
-]
+```sh
+yarn add @base-ui/react
 ```
+
+Expo SDK 53+ default build settings already satisfy the native requirements ([Balloon](https://github.com/skydoves/Balloon) on Android, [Popovers](https://github.com/aheze/Popovers) on iOS 16.4+). No extra `expo-build-properties` configuration is needed.
 
 ## License
 

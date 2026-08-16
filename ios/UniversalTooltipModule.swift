@@ -60,8 +60,8 @@ public class UniversalTooltipModule: Module {
       Prop("borderRadius") { (view, borderRadius: Double?) in
         view.cornerRadius = borderRadius ?? CGFloat(0)
       }
-      Prop("backgroundColor") { (view, backgroundColor: UIColor?) in
-        view.bubbleBackgroundColor = backgroundColor ?? .clear
+      Prop("bubbleColor") { (view, bubbleColor: UIColor?) in
+        view.bubbleBackgroundColor = bubbleColor ?? .clear
       }
     }
   }

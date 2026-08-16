@@ -1,3 +1,32 @@
+.ut-arrow {
+  position: absolute;
+  display: flex;
+  pointer-events: none;
+}
+
+.ut-arrow[data-side="top"] {
+  bottom: calc(-1 * var(--ut-arrow-height, 5px));
+  rotate: 180deg;
+}
+
+.ut-arrow[data-side="bottom"] {
+  top: calc(-1 * var(--ut-arrow-height, 5px));
+}
+
+.ut-arrow[data-side="left"] {
+  right: calc(
+    -0.5 * (var(--ut-arrow-width, 10px) + var(--ut-arrow-height, 5px))
+  );
+  rotate: 90deg;
+}
+
+.ut-arrow[data-side="right"] {
+  left: calc(
+    -0.5 * (var(--ut-arrow-width, 10px) + var(--ut-arrow-height, 5px))
+  );
+  rotate: -90deg;
+}
+
 .tooltip-zoom-in {
   animation-name: zoomIn;
   animation-timing-function: ease-in;
@@ -78,4 +107,24 @@
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+.ut-anim-zoom {
+  animation: zoomIn 300ms ease-in;
+}
+
+.ut-anim-fade[data-side="top"] {
+  animation: slideUpAndFade 300ms ease-in;
+}
+
+.ut-anim-fade[data-side="bottom"] {
+  animation: slideDownAndFade 300ms ease-in;
+}
+
+.ut-anim-fade[data-side="left"] {
+  animation: slideLeftAndFade 300ms ease-in;
+}
+
+.ut-anim-fade[data-side="right"] {
+  animation: slideRightAndFade 300ms ease-in;
 }

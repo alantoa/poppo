@@ -1,9 +1,18 @@
 {
-  "platforms": ["ios", "android", "web"],
+  "platforms": [
+    "ios",
+    "android",
+    "web"
+  ],
   "ios": {
-    "modules": ["UniversalTooltipModule"]
+    "modules": [
+      "UniversalTooltipModule",
+      "ToastActivityModule"
+    ]
   },
   "android": {
-    "modules": ["expo.modules.universaltooltip.UniversalTooltipModule"]
+    "modules": [
+      "expo.modules.universaltooltip.UniversalTooltipModule"
+    ]
   }
 }

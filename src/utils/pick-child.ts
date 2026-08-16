@@ -1,8 +1,8 @@
-import React, { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 export const pickChild = (
   children: ReactNode | undefined,
-  targetChild: React.ElementType
+  targetChild: React.ElementType,
 ): [ReactNode | undefined, ReactNode | undefined] => {
   const target: ReactNode[] = [];
   const withoutTargetChildren = React.Children.map(children, (item) => {
