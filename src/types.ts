@@ -113,6 +113,11 @@ export type PopupProps = ViewProps & {
    * Native only - whether tapping the popup should keep it open.
    */
   disableTapToDismiss?: boolean;
+  /**
+   * iOS only - disable the rubber-band drag on the bubble.
+   * @default true
+   */
+  disableDrag?: boolean;
   onTap?: () => void;
 };
 

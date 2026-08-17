@@ -62,6 +62,25 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     init {
         clipChildren = false
         clipToPadding = false
+        clipToOutline = false
+    }
+
+    // Absolute popup content is a child of this trigger-sized view. Yoga /
+    // Android may report the wrapper as only as tall as the trigger, while
+    // descendants (e.g. a button below the title) still have frames further
+    // down. Walk the tree so Balloon gets the real content box.
+    private fun subtreeExtent(view: View): Pair<Int, Int> {
+        var right = maxOf(view.measuredWidth, view.width)
+        var bottom = maxOf(view.measuredHeight, view.height)
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val child = view.getChildAt(i) ?: continue
+                val (childWidth, childHeight) = subtreeExtent(child)
+                right = maxOf(right, child.left + childWidth)
+                bottom = maxOf(bottom, child.top + childHeight)
+            }
+        }
+        return right to bottom
     }
 
     private fun nativeIdOf(view: View): String? {
@@ -101,16 +120,25 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     private fun updateContentView() {
         if (!text.isNullOrEmpty()) return
         val contentView = contentChild() as? ViewGroup ?: return
-        // The wrapper is absolutely positioned, so it sizes to its own content,
-        // but fall back to the inner child's measured size in case the wrapper
-        // reports the trigger bounds (e.g. legacy absolute-fill content).
         val inner = contentView.getChildAt(0)
-        val width =
-            if (inner != null && inner.measuredWidth > contentView.measuredWidth) inner.measuredWidth
-            else contentView.measuredWidth
-        val height =
-            if (inner != null && inner.measuredHeight > contentView.measuredHeight) inner.measuredHeight
-            else contentView.measuredHeight
+        // Remeasure without the trigger's height cap so the last children
+        // (buttons, extra lines) are included.
+        // ReactViewGroup.onMeasure rejects UNSPECIFIED — that threw
+        // "A catalyst view must have an explicit width and height" on
+        // the first draw of every custom popup (app open crash).
+        val widthHint = maxOf(contentView.measuredWidth, inner?.measuredWidth ?: 0)
+        if (widthHint <= 0) {
+            return
+        }
+        val maxH = maxOf(resources.displayMetrics.heightPixels / 2, 1)
+        val widthSpec = MeasureSpec.makeMeasureSpec(widthHint, MeasureSpec.EXACTLY)
+        val heightSpec = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
+        contentView.measure(widthSpec, heightSpec)
+        inner?.measure(widthSpec, heightSpec)
+
+        val (extentW, extentH) = subtreeExtent(contentView)
+        val width = maxOf(widthHint, extentW, contentView.measuredWidth, inner?.measuredWidth ?: 0)
+        val height = maxOf(extentH, contentView.measuredHeight, inner?.measuredHeight ?: 0)
         if (width == 0 && height == 0) {
             // Content hasn't been laid out yet — keep it attached and retry
             // on the next draw pass.
@@ -124,12 +152,16 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         val reactContext = context as? ReactContext
             ?: appContext.reactContext as? ReactContext
         val host = TooltipRootViewGroup(context, reactContext)
+        host.clipChildren = false
+        host.clipToPadding = false
+        host.setBackgroundColor(Color.TRANSPARENT)
         host.layoutParams = LayoutParams(width, height)
         host.addView(contentView)
         layoutView = host
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        super.onLayout(changed, l, t, r, b)
         if (changed) {
             isViewInvalidated = true;
         }
@@ -137,7 +169,6 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
            openTooltip()
         }
         isInitialized = true
-        return
     }
     override fun requestLayout() {
         super.requestLayout()
@@ -155,10 +186,13 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
         if (isViewInvalidated) {
-            updateContentView();
-            isViewInvalidated = false;
-            // An initially-open tooltip may have tried to open before the
-            // content view was detached and measured — retry now.
+            // Do not extract / remeasure while closed. Parked content is
+            // often still 0×0 (absolute + opacity 0); measuring it with
+            // UNSPECIFIED crashed ReactViewGroup on first paint.
+            if (opened) {
+                updateContentView()
+            }
+            isViewInvalidated = false
             if (opened && balloon?.isShowing != true) {
                 openTooltip()
             }
@@ -212,69 +246,74 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         }
     }
 
+    // Shared chrome so the body and arrow are one Balloon shape, pinned
+    // to the trigger. Custom content previously skipped these and used
+    // Balloon's defaults (arrow at 50% of the popup, ~4dp corners) on
+    // top of the React view's own radius — that's the mismatched look.
+    private fun Balloon.Builder.applyArrowChrome(): Balloon.Builder {
+        return this
+            .setArrowColor(bgColor)
+            .setArrowSize(arrowSize)
+            .setArrowPosition(0.5f)
+            .setArrowPositionRules(ArrowPositionRules.ALIGN_ANCHOR)
+            .setArrowAlignAnchorPadding(0)
+            .setArrowOrientation(getArrowOrientation())
+            .setArrowOrientationRules(ArrowOrientationRules.ALIGN_ANCHOR)
+            .setElevation(0)
+            .setOnBalloonClickListener {
+                onTap(mapOf())
+                if (!disableTapToDismiss) {
+                    dismiss()
+                }
+            }
+            .setOnBalloonDismissListener {
+                onDismiss(mapOf())
+            }
+            .setBalloonAnimation(getBalloonAnimation())
+            .setDismissWhenTouchOutside(!disableDismissWhenTouchOutside)
+    }
+
     private fun openByText() {
         val pdBottom: Int =
             if (containerStyle?.paddingBottom == null) 10 else containerStyle?.paddingBottom!!
         val pdTop =
             if (containerStyle?.paddingTop == null) 10 else containerStyle?.paddingTop!!
         val pdLeft =
-            if (containerStyle?.paddingLeft == null) 10 else containerStyle?.paddingRight!!
+            if (containerStyle?.paddingLeft == null) 10 else containerStyle?.paddingLeft!!
         val pdRight =
             if (containerStyle?.paddingRight == null) 10 else containerStyle?.paddingRight!!
         val fontSize = textStyle?.fontSize?.let { if (it == 0.0f) null else it } ?: 13f
 
         balloon = Balloon.Builder(context)
             .setText(text!!)
-            .setBackgroundColor(bgColor)
-                .setTextColor(textStyle?.color ?: -16777216)
+            .setTextColor(textStyle?.color ?: -16777216)
             .setTextSize(fontSize)
             .setTextGravity(android.view.Gravity.START)
             .setTextTypeface(convertFontWeightToTypeface(textStyle?.fontWeight ?: "normal"))
-            .setArrowPositionRules(ArrowPositionRules.ALIGN_ANCHOR)
-            .setArrowPosition(0.5f)
             .setMaxWidth(maxWidth)
-            .setArrowSize(arrowSize)
-            .setArrowOrientation(getArrowOrientation())
             .setPaddingBottom(pdBottom)
             .setPaddingTop(pdTop)
             .setPaddingLeft(pdLeft)
             .setPaddingRight(pdRight)
+            .setBackgroundColor(bgColor)
             .setCornerRadius(borderRadius)
-            .setOnBalloonClickListener {
-                onTap(mapOf())
-                if (!disableTapToDismiss) {
-                    dismiss()
-                }
-            }
-            .setOnBalloonDismissListener {
-                onDismiss(mapOf())
-            }
-            .setBalloonAnimation(getBalloonAnimation())
-            .setDismissWhenTouchOutside(!disableDismissWhenTouchOutside)
-            // Todo: use XML set style just like web & iOS
-            //.setBalloonAnimationStyle()
+            .applyArrowChrome()
             .build()
-
     }
 
     private fun openByContentView() {
+        // Custom content already paints its own fill and radius. A second
+        // Balloon body clipped those children (the Confirm button). Only
+        // the arrow is native; the React tree is the body.
         balloon = Balloon.Builder(context)
             .setLayout(layoutView!!)
-            .setArrowColor(bgColor)
-            .setArrowSize(arrowSize)
-            .setArrowPosition(0.5f)
-            .setArrowOrientation(getArrowOrientation())
-            .setOnBalloonClickListener {
-                onTap(mapOf())
-                if (!disableTapToDismiss) {
-                    dismiss()
-                }
-            }
-            .setOnBalloonDismissListener {
-                onDismiss(mapOf())
-            }
-            .setBalloonAnimation(getBalloonAnimation())
-            .setDismissWhenTouchOutside(!disableDismissWhenTouchOutside)
+            .setWidth(BalloonSizeSpec.WRAP)
+            .setHeight(BalloonSizeSpec.WRAP)
+            .setPadding(0)
+            .setMargin(0)
+            .setBackgroundColor(Color.TRANSPARENT)
+            .setCornerRadius(0f)
+            .applyArrowChrome()
             .build()
     }
 

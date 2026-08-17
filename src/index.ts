@@ -10,11 +10,3 @@ export type {
   ToastProviderProps,
   ToastViewportPosition,
 } from "./toast";
-
-export {
-  endToastActivity,
-  isLiveActivitySupported,
-  startToastActivity,
-  updateToastActivity,
-} from "./toast-activity";
-export type { ToastActivityOptions } from "./toast-activity";

@@ -1,15 +1,12 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { Platform, Pressable, ScrollView, Text, useColorScheme, View } from "react-native";
+import { Pressable, ScrollView, Text, useColorScheme, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Popover,
   Toast,
   Tooltip,
-  endToastActivity,
-  isLiveActivitySupported,
-  startToastActivity,
   useToastManager,
 } from "universal-tooltip";
 import type { Side, ToastObject, ToastViewportPosition } from "universal-tooltip";
@@ -87,7 +84,7 @@ const RichTooltip = () => {
           <Hint.Popup presetAnimation="fadeIn">
             <View
               style={{
-                width: 260,
+                maxWidth: 260,
                 flexDirection: "row",
                 alignItems: "center",
                 gap: 12,
@@ -98,7 +95,7 @@ const RichTooltip = () => {
               }}
             >
               <Ionicons name="wifi" size={20} color={theme.accent} />
-              <View style={{ flex: 1, gap: 2 }}>
+              <View style={{ flexShrink: 1, gap: 2 }}>
                 <Text
                   style={{
                     color: theme.onBubble,
@@ -131,6 +128,7 @@ const RichTooltip = () => {
 const ConfirmPopover = () => {
   const theme = useTheme();
   const toast = useToastManager();
+  const [removePressed, setRemovePressed] = useState(false);
   return (
     <Popover.Root>
       <Popover.Trigger testID="demo-popover-confirm" accessibilityLabel="Open confirm popover">
@@ -171,6 +169,8 @@ const ConfirmPopover = () => {
                 testID="demo-popover-remove"
                 accessibilityRole="button"
                 accessibilityLabel="Remove"
+                onPressIn={() => setRemovePressed(true)}
+                onPressOut={() => setRemovePressed(false)}
                 onPress={() =>
                   toast.add({
                     id: "removed",
@@ -178,15 +178,17 @@ const ConfirmPopover = () => {
                     description: "You can download it again anytime",
                   })
                 }
-                style={({ pressed }) => ({
+                style={{
                   alignSelf: "flex-start",
                   minHeight: 40,
                   paddingHorizontal: 16,
                   borderRadius: theme.radius.button,
-                  backgroundColor: pressed ? theme.canvas : theme.onBubble,
+                  backgroundColor: removePressed
+                    ? theme.canvas
+                    : theme.onBubble,
                   alignItems: "center",
                   justifyContent: "center",
-                })}
+                }}
               >
                 <Text
                   style={{
@@ -223,8 +225,8 @@ const DemoToast = ({ toast }: { toast: ToastObject }) => {
       toast={toast}
       presetAnimation="slide"
       style={{
-        minWidth: 280,
         maxWidth: 360,
+        alignSelf: "center",
         flexDirection: "row",
         alignItems: "center",
         gap: 12,
@@ -242,7 +244,7 @@ const DemoToast = ({ toast }: { toast: ToastObject }) => {
         size={18}
         color={theme.success}
       />
-      <View style={{ flex: 1, gap: 2 }}>
+      <View style={{ flexShrink: 1, gap: 2 }}>
         <Toast.Title
           style={{
             color: theme.ink,
@@ -327,7 +329,6 @@ const Gallery = ({
   setPosition: (next: ToastViewportPosition) => void;
 }) => {
   const toast = useToastManager();
-  const [islandActive, setIslandActive] = useState(false);
 
   return (
     <View style={{ gap: 28 }}>
@@ -432,43 +433,6 @@ const Gallery = ({
           />
         </Row>
       </Section>
-
-      {Platform.OS === "ios" ? (
-        <Section
-          index="04"
-          title="Live Activity"
-          hint="Dynamic Island · iOS 16.2+. Ends after 6 seconds."
-        >
-          <Row label="Island" subtitle={islandActive ? "Active" : "Ready"}>
-            <Button
-              testID="demo-island"
-              label={islandActive ? "Active" : "Start"}
-              disabled={islandActive}
-              onPress={async () => {
-                if (!isLiveActivitySupported()) {
-                  toast.add({
-                    id: "island",
-                    title: "Live Activities unavailable",
-                    description: "Enable them in Settings and try again",
-                  });
-                  return;
-                }
-                const id = await startToastActivity({
-                  title: "Backup complete",
-                  description: "128 photos synced to iCloud",
-                });
-                if (id) {
-                  setIslandActive(true);
-                  setTimeout(() => {
-                    endToastActivity(id);
-                    setIslandActive(false);
-                  }, 6000);
-                }
-              }}
-            />
-          </Row>
-        </Section>
-      ) : null}
     </View>
   );
 };

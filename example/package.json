@@ -31,7 +31,6 @@
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
-    "@bacons/apple-targets": "~5.0.0",
     "@types/react": "~19.2.18",
     "babel-plugin-module-resolver": "^5.0.2",
     "tailwindcss": "^3.4.17",

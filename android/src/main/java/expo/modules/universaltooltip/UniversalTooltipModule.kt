@@ -30,7 +30,7 @@ class UniversalTooltipModule : Module() {
             Prop("side") { view: UniversalTooltipView, side: ContentSide ->
                 view.side = side
             }
-            Prop("text") { view: UniversalTooltipView, text: String ->
+            Prop("text") { view: UniversalTooltipView, text: String? ->
                 view.text = text
             }
             Prop("maxWidth") { view: UniversalTooltipView, maxWidth: Int ->

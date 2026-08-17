@@ -20,10 +20,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "expo.modules.universaltooltip.example",
-      "infoPlist": {
-        "NSSupportsLiveActivities": true
-      }
+      "bundleIdentifier": "expo.modules.universaltooltip.example"
     },
     "android": {
       "adaptiveIcon": {
@@ -36,9 +33,6 @@
       "bundler": "metro",
       "output": "single",
       "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "@bacons/apple-targets"
-    ]
+    }
   }
 }

@@ -6,8 +6,7 @@
   ],
   "ios": {
     "modules": [
-      "UniversalTooltipModule",
-      "ToastActivityModule"
+      "UniversalTooltipModule"
     ]
   },
   "android": {

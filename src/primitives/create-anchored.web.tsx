@@ -150,6 +150,7 @@ export const createAnchoredSet = (
       showDuration: _showDuration,
       dismissDuration: _dismissDuration,
       disableTapToDismiss: _disableTapToDismiss,
+      disableDrag: _disableDrag,
       ...rest
     },
     ref,
@@ -185,8 +186,12 @@ export const createAnchoredSet = (
           className={`${animationClass} ${className ?? ""}`}
           onClick={onTap}
           style={{
+            position: "relative",
+            overflow: "visible",
             backgroundColor: bubbleColor,
             borderRadius: flat.borderRadius,
+            width: "max-content",
+            maxWidth: flat.maxWidth,
           }}
         >
           <View style={style as any} {...rest}>

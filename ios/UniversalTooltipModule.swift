@@ -54,6 +54,9 @@ public class UniversalTooltipModule: Module {
       Prop("disableTapToDismiss") { (view, disableTapToDismiss: Bool?) in
         view.disableTapToDismiss = disableTapToDismiss ?? false
       }
+      Prop("disableDrag") { (view, disableDrag: Bool?) in
+        view.disableDrag = disableDrag ?? false
+      }
       Prop("disableDismissWhenTouchOutside") { (view, disableDismissWhenTouchOutside: Bool?) in
         view.disableDismissWhenTouchOutside = disableDismissWhenTouchOutside ?? false
       }
@@ -62,6 +65,12 @@ public class UniversalTooltipModule: Module {
       }
       Prop("bubbleColor") { (view, bubbleColor: UIColor?) in
         view.bubbleBackgroundColor = bubbleColor ?? .clear
+      }
+      Prop("contentWidth") { (view, contentWidth: Double?) in
+        view.contentWidth = contentWidth ?? 0
+      }
+      Prop("contentHeight") { (view, contentHeight: Double?) in
+        view.contentHeight = contentHeight ?? 0
       }
     }
   }
