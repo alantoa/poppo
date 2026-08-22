@@ -116,6 +116,7 @@ const resolvePopupLayout = (children: React.ReactNode, style: any) => {
 type AnchoredContextValue = {
   open: boolean;
   setOpen: (open: boolean) => void;
+  toggle: () => void;
 };
 
 export const createAnchoredSet = (
@@ -124,6 +125,7 @@ export const createAnchoredSet = (
   const AnchoredContext = createContext<AnchoredContextValue>({
     open: false,
     setOpen: () => {},
+    toggle: () => {},
   });
 
   const Trigger = ({
@@ -133,9 +135,9 @@ export const createAnchoredSet = (
     closeDelay: _closeDelay,
     ...rest
   }: TriggerProps) => {
-    const { open, setOpen } = useContext(AnchoredContext);
+    const { toggle } = useContext(AnchoredContext);
     return (
-      <Pressable disabled={disabled} onPress={() => setOpen(!open)} {...rest}>
+      <Pressable disabled={disabled} onPress={toggle} {...rest}>
         {children}
       </Pressable>
     );
@@ -178,8 +180,24 @@ export const createAnchoredSet = (
   }: PopupProps) => {
     const { open } = useContext(AnchoredContext);
     const { width: windowWidth } = useWindowDimensions();
-    const [childrenWithoutArrow] = pickChild(children, Arrow);
-    if (isTextContent(childrenWithoutArrow)) {
+    // Splitting the arrow out walks the child list; it only has to happen
+    // when the children themselves change, not on every parent render.
+    const { childrenWithoutArrow, isText } = useMemo(() => {
+      const [withoutArrow] = pickChild(children, Arrow);
+      return {
+        childrenWithoutArrow: withoutArrow,
+        isText: isTextContent(withoutArrow),
+      };
+    }, [children]);
+    const slotStyle = useMemo(
+      () => [popupSlotStyle, { width: windowWidth }],
+      [windowWidth],
+    );
+    const bodyStyle = useMemo(
+      () => [style, { alignSelf: "flex-start", flexShrink: 0 } as const],
+      [style],
+    );
+    if (isText) {
       // Text bubbles are drawn natively from props. Do not mount a
       // placeholder — a dummy child would compete with the trigger for
       // the content slot after remounts.
@@ -190,13 +208,13 @@ export const createAnchoredSet = (
         nativeID={POPUP_CONTENT_NATIVE_ID}
         collapsable={false}
         pointerEvents="box-none"
-        style={[popupSlotStyle, { width: windowWidth }]}
+        style={slotStyle}
       >
         <View
           nativeID={POPUP_BODY_NATIVE_ID}
           collapsable={false}
           pointerEvents={open ? "auto" : "none"}
-          style={[style, { alignSelf: "flex-start", flexShrink: 0 }]}
+          style={bodyStyle}
           {...(Platform.OS === "android" && onTap ? { onTouchEnd: onTap } : {})}
           {...rest}
         >
@@ -235,29 +253,76 @@ export const createAnchoredSet = (
       },
       [openProp, onOpenChange, onDismiss],
     );
-    const contextValue = useMemo(() => ({ open, setOpen }), [open, setOpen]);
+    const toggle = useCallback(() => setOpen(!open), [open, setOpen]);
+    const contextValue = useMemo(
+      () => ({ open, setOpen, toggle }),
+      [open, setOpen, toggle],
+    );
 
-    const [withoutTrigger, triggerChildren] = pickChild(children, Trigger);
+    // Reading the compound parts means walking the element tree and
+    // flattening styles. None of it depends on `open`, so it must not be
+    // redone every time the popup toggles or a parent re-renders — a list
+    // of anchors would repeat the whole scan per row.
+    const parts = useMemo(() => {
+      const [withoutTrigger, triggerChildren] = pickChild(children, Trigger);
 
-    const positionerEl = findElement(withoutTrigger, Positioner);
-    const popupEl =
-      findElement(withoutTrigger, Popup) ??
-      findElement((positionerEl?.props as any)?.children, Popup);
-    const { side, sideOffset } = (positionerEl?.props ?? {}) as PositionerProps;
-    const popupProps = (popupEl?.props ?? {}) as any;
+      const positionerEl = findElement(withoutTrigger, Positioner);
+      const popupEl =
+        findElement(withoutTrigger, Popup) ??
+        findElement((positionerEl?.props as any)?.children, Popup);
+      const { side, sideOffset } = (positionerEl?.props ??
+        {}) as PositionerProps;
+      const popupProps = (popupEl?.props ?? {}) as any;
 
-    const [popupChildrenWithoutArrow] = pickChild(popupProps.children, Arrow);
-    const { useNativeText, bubbleColor, bubbleRadius, nativeTextProps } =
-      resolvePopupLayout(popupChildrenWithoutArrow, popupProps.style);
+      const [popupChildrenWithoutArrow] = pickChild(popupProps.children, Arrow);
+      const { useNativeText, bubbleColor, bubbleRadius, nativeTextProps } =
+        resolvePopupLayout(popupChildrenWithoutArrow, popupProps.style);
 
-    const arrowEl = findElement(popupProps.children, Arrow);
+      const arrowEl = findElement(popupProps.children, Arrow);
+      const {
+        width: arrowWidth,
+        height: arrowHeight,
+        backgroundColor: arrowColor,
+      } = (arrowEl?.props ?? {}) as ArrowProps;
+
+      return {
+        withoutTrigger,
+        triggerChildren,
+        side,
+        sideOffset,
+        popupProps,
+        nativeTextProps,
+        text: useNativeText ? nativeTextProps.text : undefined,
+        bubbleColor: processColor(arrowColor ?? bubbleColor),
+        bubbleRadius,
+        arrowWidth,
+        arrowHeight,
+      };
+    }, [children]);
+
     const {
-      width: arrowWidth,
-      height: arrowHeight,
-      backgroundColor: arrowColor,
-    } = (arrowEl?.props ?? {}) as ArrowProps;
+      withoutTrigger,
+      triggerChildren,
+      side,
+      sideOffset,
+      popupProps,
+      nativeTextProps,
+      text,
+      bubbleColor,
+      bubbleRadius,
+      arrowWidth,
+      arrowHeight,
+    } = parts;
 
     const { style: rootStyle, ...rootRest } = rest;
+    const nativeStyle = useMemo(
+      () => [
+        { alignSelf: "flex-start", overflow: "visible" } as const,
+        rootStyle,
+      ],
+      [rootStyle],
+    );
+    const handleDismiss = useCallback(() => setOpen(false), [setOpen]);
 
     return (
       <AnchoredContext.Provider value={contextValue}>
@@ -265,7 +330,7 @@ export const createAnchoredSet = (
           open={open}
           side={side}
           sideOffset={sideOffset}
-          bubbleColor={processColor(arrowColor ?? bubbleColor)}
+          bubbleColor={bubbleColor}
           borderRadius={bubbleRadius}
           arrowWidth={arrowWidth}
           arrowHeight={arrowHeight}
@@ -277,9 +342,9 @@ export const createAnchoredSet = (
           onTap={popupProps.onTap}
           disableDismissWhenTouchOutside={disableDismissWhenTouchOutside}
           {...nativeTextProps}
-          text={useNativeText ? nativeTextProps.text : undefined}
-          onDismiss={() => setOpen(false)}
-          style={[{ alignSelf: "flex-start", overflow: "visible" }, rootStyle]}
+          text={text}
+          onDismiss={handleDismiss}
+          style={nativeStyle}
           {...rootRest}
         >
           {triggerChildren}
