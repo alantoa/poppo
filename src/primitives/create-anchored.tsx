@@ -266,13 +266,28 @@ export const createAnchoredSet = (
     const parts = useMemo(() => {
       const [withoutTrigger, triggerChildren] = pickChild(children, Trigger);
 
-      const positionerEl = findElement(withoutTrigger, Positioner);
-      const popupEl =
-        findElement(withoutTrigger, Popup) ??
-        findElement((positionerEl?.props as any)?.children, Popup);
+      // Structural lookup: through the pass-through parts and fragments only,
+      // at any depth, and never into the user's own popup content.
+      const positionerEl = findElement(withoutTrigger, Positioner, [Portal]);
+      const popupEl = findElement(withoutTrigger, Popup, [Portal, Positioner]);
       const { side, sideOffset } = (positionerEl?.props ??
         {}) as PositionerProps;
       const popupProps = (popupEl?.props ?? {}) as any;
+
+      // `Children.toArray` drops the holes `pickChild` leaves behind, so this
+      // is "the user rendered something besides the trigger".
+      const hasParts = React.Children.toArray(withoutTrigger).length > 0;
+      if (__DEV__ && popupEl == null && hasParts) {
+        console.warn(
+          "[universal-tooltip] No <Popup> found, so the popup's own props " +
+            "(side, animation, arrow, colours) fall back to defaults.\n" +
+            "Parts are read from the elements you write inside <Root>, so " +
+            "they cannot be wrapped in a component of your own: React has " +
+            "not rendered that component yet, and its output does not exist " +
+            "to be read. Write <Portal>, <Positioner>, <Popup> and <Arrow> " +
+            "out inside <Root>.",
+        );
+      }
 
       const [popupChildrenWithoutArrow] = pickChild(popupProps.children, Arrow);
       const { useNativeText, bubbleColor, bubbleRadius, nativeTextProps } =
