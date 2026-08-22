@@ -3,12 +3,14 @@ package expo.modules.universaltooltip
 import android.content.Context
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
 import com.facebook.react.bridge.ReactContext
-import com.skydoves.balloon.ArrowOrientation
-import com.skydoves.balloon.ArrowOrientationRules
-import com.skydoves.balloon.ArrowPositionRules
 import com.skydoves.balloon.Balloon
 import com.skydoves.balloon.BalloonAnimation
 import com.skydoves.balloon.BalloonSizeSpec
@@ -37,6 +39,9 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     companion object {
         const val CONTENT_NATIVE_ID = "universal-tooltip-content"
         const val BODY_NATIVE_ID = "universal-tooltip-body"
+
+        /** Keeps the bubble off the display edge, matching iOS. */
+        private const val EDGE_MARGIN_DP = 8
     }
 
     val onTap by EventDispatcher()
@@ -221,11 +226,8 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         val anchor = anchorView()
         if (anchor.width == 0 || anchor.height == 0) return
 
-        val balloon = if (!text.isNullOrEmpty()) {
-            buildTextBalloon()
-        } else {
-            buildContentBalloon() ?: return
-        }
+        val host = if (!text.isNullOrEmpty()) prepareTextHost() else prepareContentHost() ?: return
+        val balloon = buildBalloon(host)
         this.balloon = balloon
         chromeSignature = chromeSignature()
 
@@ -236,7 +238,32 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
             ContentSide.Left -> balloon.showAlignStart(anchor, -offset, 0)
             ContentSide.Top, null -> balloon.showAlignTop(anchor, 0, -offset)
         }
+        // Balloon centres the popup on the trigger but slides it inward at a
+        // screen edge; only now is it on screen and its real offset knowable.
+        host.post { pinArrowToAnchor(host, anchor) }
     }
+
+    /**
+     * Points the arrow at the trigger's centre. Balloon's own
+     * `ArrowPositionRules` cannot be used: its arrow is disabled here because
+     * it is always square and would ignore an `<Arrow>`'s height.
+     */
+    private fun pinArrowToAnchor(host: TooltipRootViewGroup, anchor: View) {
+        if (!host.isAttachedToWindow || !anchor.isAttachedToWindow) return
+        val anchorPos = IntArray(2)
+        val hostPos = IntArray(2)
+        anchor.getLocationOnScreen(anchorPos)
+        host.getLocationOnScreen(hostPos)
+        val center = if (side == ContentSide.Left || side == ContentSide.Right) {
+            anchorPos[1] + anchor.height / 2 - hostPos[1]
+        } else {
+            anchorPos[0] + anchor.width / 2 - hostPos[0]
+        }
+        host.setArrowCenter(center)
+    }
+
+    private val isHorizontal: Boolean
+        get() = side == ContentSide.Left || side == ContentSide.Right
 
     private fun getBalloonAnimation(): BalloonAnimation = when (presetAnimation) {
         PresetAnimation.FadeIn -> BalloonAnimation.FADE
@@ -245,38 +272,24 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         null -> BalloonAnimation.FADE
     }
 
-    private fun getArrowOrientation(): ArrowOrientation = when (side) {
-        ContentSide.Bottom -> ArrowOrientation.BOTTOM
-        ContentSide.Right -> ArrowOrientation.START
-        ContentSide.Left -> ArrowOrientation.END
-        ContentSide.Top, null -> ArrowOrientation.TOP
-    }
-
-    private fun isHorizontal(): Boolean =
-        side == ContentSide.Left || side == ContentSide.Right
-
-    // Shared chrome so the body and arrow are one Balloon shape, pinned
-    // to the trigger.
-    //
-    // `ALIGN_ANCHOR` keeps the arrow on the trigger when the bubble is pushed
-    // inward by a screen edge, but Balloon only resolves it correctly for the
-    // vertical sides — on the horizontal ones it dropped the arrow onto the
-    // bubble's bottom corner. `showAlignStart` / `showAlignEnd` center the
-    // bubble on the trigger anyway, so the balloon's own middle is the right
-    // spot there.
-    private fun Balloon.Builder.applyArrowChrome(): Balloon.Builder {
+    /**
+     * Balloon is used purely as a positioned popup window: the bubble body,
+     * its corners and the arrow are all drawn by [TooltipRootViewGroup], so a
+     * text bubble and a React one behave identically and an `<Arrow>`'s width
+     * and height are both honoured. Balloon's own arrow is a square ImageView
+     * and cannot express a 14x8 triangle.
+     */
+    private fun buildBalloon(host: TooltipRootViewGroup): Balloon {
         val gen = generation
-        return this
-            .setArrowColor(bgColor)
-            .setArrowSize(arrowWidth.coerceAtLeast(1))
-            .setArrowPosition(0.5f)
-            .setArrowPositionRules(
-                if (isHorizontal()) ArrowPositionRules.ALIGN_BALLOON
-                else ArrowPositionRules.ALIGN_ANCHOR
-            )
-            .setArrowAlignAnchorPadding(0)
-            .setArrowOrientation(getArrowOrientation())
-            .setArrowOrientationRules(ArrowOrientationRules.ALIGN_ANCHOR)
+        return Balloon.Builder(context)
+            .setLayout(host)
+            .setWidth(BalloonSizeSpec.WRAP)
+            .setHeight(BalloonSizeSpec.WRAP)
+            .setIsVisibleArrow(false)
+            .setPadding(0)
+            .setMarginHorizontal(if (isHorizontal) 0 else EDGE_MARGIN_DP)
+            .setBackgroundColor(Color.TRANSPARENT)
+            .setCornerRadius(0f)
             .setElevation(0)
             .setOnBalloonClickListener {
                 onTap(mapOf())
@@ -292,57 +305,93 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
             }
             .setBalloonAnimation(getBalloonAnimation())
             .setDismissWhenTouchOutside(!disableDismissWhenTouchOutside)
-    }
-
-    private fun buildTextBalloon(): Balloon {
-        val style = containerStyle
-        val fontSize = textStyle?.fontSize?.let { if (it == 0.0f) null else it } ?: 13f
-        return Balloon.Builder(context)
-            .setText(text!!)
-            .setTextColor(textStyle?.color ?: Color.BLACK)
-            .setTextSize(fontSize)
-            .setTextGravity(android.view.Gravity.START)
-            .setTextTypeface(convertFontWeightToTypeface(textStyle?.fontWeight ?: "normal"))
-            .setMaxWidth(maxWidth)
-            .setPaddingTop(style?.paddingTop ?: 10)
-            .setPaddingBottom(style?.paddingBottom ?: 10)
-            .setPaddingLeft(style?.paddingLeft ?: 10)
-            .setPaddingRight(style?.paddingRight ?: 10)
-            .setBackgroundColor(bgColor)
-            .setCornerRadius(borderRadius)
-            .applyArrowChrome()
             .build()
     }
 
+    /** Drops anything we added ourselves, never React's popup slot. */
+    private fun clearBubbleBody(host: TooltipRootViewGroup) {
+        for (index in host.childCount - 1 downTo 0) {
+            val child = host.getChildAt(index)
+            if (child !== slotView) {
+                host.removeViewAt(index)
+            }
+        }
+    }
+
+    private fun applyArrowChrome(host: TooltipRootViewGroup) {
+        host.setArrow(
+            side = side ?: ContentSide.Top,
+            widthPx = dpToPx(arrowWidth),
+            heightPx = dpToPx(arrowHeight),
+            color = bgColor,
+            cornerRadiusPx = borderRadius * density,
+        )
+        // A Balloon keeps its content view attached until it is garbage
+        // collected; detach before handing the same host to the next one.
+        (host.parent as? ViewGroup)?.removeView(host)
+    }
+
+    /** The natively drawn text bubble: a plain TextView on a rounded fill. */
+    private fun prepareTextHost(): TooltipRootViewGroup {
+        val host = host()
+        host.dispatchesToReact = false
+        host.setBubbleFrame(0, 0, 0, 0)
+        clearBubbleBody(host)
+        slotView?.visibility = View.GONE
+
+        val style = containerStyle
+        val label = TextView(context).apply {
+            text = this@UniversalTooltipView.text
+            setTextColor(textStyle?.color ?: Color.BLACK)
+            setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                textStyle?.fontSize?.let { if (it == 0f) null else it } ?: 13f,
+            )
+            typeface = convertFontWeightToTypeface(textStyle?.fontWeight ?: "normal")
+            gravity = Gravity.START
+            includeFontPadding = false
+            maxWidth = dpToPx(this@UniversalTooltipView.maxWidth)
+            setPadding(
+                dpToPx(style?.paddingLeft ?: 10),
+                dpToPx(style?.paddingTop ?: 10),
+                dpToPx(style?.paddingRight ?: 10),
+                dpToPx(style?.paddingBottom ?: 10),
+            )
+            background = GradientDrawable().apply {
+                setColor(bgColor)
+                cornerRadius = borderRadius * density
+            }
+        }
+        host.addView(
+            label,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        applyArrowChrome(host)
+        return host
+    }
+
     /**
-     * Custom content already paints its own fill and radius, so the Balloon
-     * body is transparent and zero-padded — only the arrow is native.
-     * Returns null while React has not laid the bubble out yet; [onLayout]
-     * retries.
+     * The React-rendered bubble. Returns null while React has not laid it out
+     * yet; [onLayout] retries.
      */
-    private fun buildContentBalloon(): Balloon? {
+    private fun prepareContentHost(): TooltipRootViewGroup? {
         val host = contentHost ?: return null
         val body = bodyView() ?: return null
         if (body.width == 0 || body.height == 0) return null
 
+        host.dispatchesToReact = true
+        clearBubbleBody(host)
+        body.visibility = View.VISIBLE
+        slotView?.visibility = View.VISIBLE
         val slot = slotView
         val offsetLeft = if (slot == null) body.left else bodyOffsetX(body, slot)
         val offsetTop = if (slot == null) body.top else bodyOffsetY(body, slot)
         host.setBubbleFrame(offsetLeft, offsetTop, body.width, body.height)
-        // A Balloon keeps its content view attached until it is garbage
-        // collected; detach before handing the same host to the next one.
-        (host.parent as? ViewGroup)?.removeView(host)
-
-        return Balloon.Builder(context)
-            .setLayout(host)
-            .setWidth(BalloonSizeSpec.WRAP)
-            .setHeight(BalloonSizeSpec.WRAP)
-            .setPadding(0)
-            .setMargin(0)
-            .setBackgroundColor(Color.TRANSPARENT)
-            .setCornerRadius(0f)
-            .applyArrowChrome()
-            .build()
+        applyArrowChrome(host)
+        return host
     }
 
     private fun bodyOffsetX(body: View, slot: View): Int {
