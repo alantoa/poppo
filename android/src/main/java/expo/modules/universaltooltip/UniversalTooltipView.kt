@@ -3,11 +3,13 @@ package expo.modules.universaltooltip
 import android.content.Context
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.facebook.react.bridge.ReactContext
@@ -84,6 +86,10 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     private var generation = 0
     private var contentHost: TooltipRootViewGroup? = null
     private var slotView: View? = null
+    private var scrollListener: ViewTreeObserver.OnScrollChangedListener? = null
+    private var followedAnchor: View? = null
+    private val lastAnchorPosition = intArrayOf(Int.MIN_VALUE, Int.MIN_VALUE)
+    private val visibleRect = Rect()
 
     /** React's view of this container's children, in React's own order. */
     private val reactChildren = mutableListOf<View>()
@@ -241,6 +247,64 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         // Balloon centres the popup on the trigger but slides it inward at a
         // screen edge; only now is it on screen and its real offset knowable.
         host.post { pinArrowToAnchor(host, anchor) }
+        startFollowingAnchor(host, anchor)
+    }
+
+    /**
+     * Keeps the popup glued to its trigger while the page behind it scrolls.
+     * A PopupWindow is positioned once and then stays where it was put, so
+     * without this the bubble detaches from its anchor on the first scroll —
+     * iOS follows the anchor, and the two should not disagree.
+     */
+    private fun startFollowingAnchor(host: TooltipRootViewGroup, anchor: View) {
+        stopFollowingAnchor()
+        val observer = anchor.viewTreeObserver
+        if (!observer.isAlive) return
+        val listener = ViewTreeObserver.OnScrollChangedListener {
+            followAnchor(host, anchor)
+        }
+        observer.addOnScrollChangedListener(listener)
+        scrollListener = listener
+        followedAnchor = anchor
+    }
+
+    private fun stopFollowingAnchor() {
+        val listener = scrollListener ?: return
+        val observer = followedAnchor?.viewTreeObserver
+        if (observer != null && observer.isAlive) {
+            observer.removeOnScrollChangedListener(listener)
+        }
+        scrollListener = null
+        followedAnchor = null
+        lastAnchorPosition[0] = Int.MIN_VALUE
+        lastAnchorPosition[1] = Int.MIN_VALUE
+    }
+
+    private fun followAnchor(host: TooltipRootViewGroup, anchor: View) {
+        val balloon = balloon ?: return
+        if (!balloon.isShowing) return
+        if (!anchor.isAttachedToWindow || !anchor.getGlobalVisibleRect(visibleRect)) {
+            // The trigger scrolled away — a popup with nothing left to point
+            // at would just hang in the middle of the screen.
+            dismiss()
+            return
+        }
+        val position = IntArray(2)
+        anchor.getLocationOnScreen(position)
+        if (position[0] == lastAnchorPosition[0] && position[1] == lastAnchorPosition[1]) {
+            return
+        }
+        lastAnchorPosition[0] = position[0]
+        lastAnchorPosition[1] = position[1]
+
+        val offset = dpToPx(sideOffset)
+        when (side) {
+            ContentSide.Bottom -> balloon.updateAlignBottom(anchor, 0, offset)
+            ContentSide.Right -> balloon.updateAlignEnd(anchor, offset, 0)
+            ContentSide.Left -> balloon.updateAlignStart(anchor, -offset, 0)
+            ContentSide.Top, null -> balloon.updateAlignTop(anchor, 0, -offset)
+        }
+        pinArrowToAnchor(host, anchor)
     }
 
     /**
@@ -416,6 +480,7 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
 
     private fun dismiss() {
         openRequested = false
+        stopFollowingAnchor()
         balloon?.dismiss()
         balloon = null
     }
