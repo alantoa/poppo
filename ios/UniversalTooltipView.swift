@@ -106,7 +106,9 @@ class UniversalTooltipView: ExpoView {
   private var openRequested = false
   private var openDeadline: CFTimeInterval = 0
   private var displayLink: CADisplayLink?
+  private var scrollObservations: [NSKeyValueObservation] = []
   private var lastSourceFrame: CGRect = .null
+  private var appliedChrome: Chrome?
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -117,6 +119,44 @@ class UniversalTooltipView: ExpoView {
 
   deinit {
     displayLink?.invalidate()
+  }
+
+  /// Everything that changes what the popup looks like or where it sits.
+  /// Props arrive one at a time and the whole map is re-applied on every
+  /// transaction, so without this a parent re-render would re-measure text
+  /// and re-run the placement maths for nothing.
+  private struct Chrome: Equatable {
+    let color: UIColor
+    let side: ContentSide
+    let cornerRadius: CGFloat
+    let arrowWidth: Double
+    let arrowHeight: Double
+    let sideOffset: CGFloat
+    let text: String?
+    let maxWidth: Double?
+    let fontSize: Double
+    let fontWeight: String
+    let fontFamily: String?
+    let textColor: UIColor
+    let padding: UIEdgeInsets
+  }
+
+  private func currentChrome() -> Chrome {
+    Chrome(
+      color: bubbleBackgroundColor,
+      side: side,
+      cornerRadius: cornerRadius,
+      arrowWidth: arrowWidth,
+      arrowHeight: arrowHeight,
+      sideOffset: sideOffset,
+      text: text,
+      maxWidth: maxWidth,
+      fontSize: textStyle.fontSize,
+      fontWeight: textStyle.fontWeight,
+      fontFamily: textStyle.fontFamily,
+      textColor: textStyle.color,
+      padding: paddingInsets()
+    )
   }
 
   // MARK: - React children
@@ -373,9 +413,36 @@ class UniversalTooltipView: ExpoView {
     displayLink = nil
   }
 
+  /// Track the anchor by watching the scroll views it sits in, rather than
+  /// re-checking its frame every frame: a popup can be open for a long time,
+  /// and a display link that never sleeps keeps the display out of its idle
+  /// refresh rate for all of it. Layout-driven moves are already covered by
+  /// `layoutSubviews`.
+  private func startFollowingAnchor() {
+    stopFollowingAnchor()
+    var ancestor = superview
+    while let current = ancestor {
+      if let scrollView = current as? UIScrollView {
+        scrollObservations.append(
+          scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+            self?.updatePlacement()
+          }
+        )
+      }
+      ancestor = current.superview
+    }
+  }
+
+  private func stopFollowingAnchor() {
+    scrollObservations.forEach { $0.invalidate() }
+    scrollObservations.removeAll()
+  }
+
+  /// Only runs while waiting for React to measure the bubble; once the popup
+  /// is up, `startFollowingAnchor` takes over.
   @objc fileprivate func onDisplayLink() {
-    if isPresented {
-      updatePlacement()
+    guard !isPresented else {
+      stopDisplayLink()
       return
     }
     guard openRequested else {
@@ -443,9 +510,11 @@ class UniversalTooltipView: ExpoView {
     openRequested = false
     lastSourceFrame = .null
 
+    appliedChrome = currentChrome()
     applyPlacement(placement(for: size, source: source, in: window))
     animateIn(container)
-    startDisplayLink()
+    stopDisplayLink()
+    startFollowingAnchor()
   }
 
   /// Re-runs the geometry against the trigger's current position, so a popup
@@ -542,6 +611,9 @@ class UniversalTooltipView: ExpoView {
   /// Props arrive one at a time and can change while the popup is on screen —
   /// a theme switch repaints the bubble, so the native chrome has to follow.
   func didUpdateProps() {
+    let chrome = currentChrome()
+    guard chrome != appliedChrome else { return }
+    appliedChrome = chrome
     guard isPresented, let window, let source = sourceFrame() else { return }
     shapeView?.shapeLayer.fillColor = bubbleBackgroundColor.cgColor
     let size: CGSize
@@ -582,6 +654,7 @@ class UniversalTooltipView: ExpoView {
     }
     isPresented = false
     stopDisplayLink()
+    stopFollowingAnchor()
 
     let overlay = self.overlay
     let container = bubbleContainer
@@ -677,6 +750,8 @@ class UniversalTooltipView: ExpoView {
     }
     openRequested = false
     lastSourceFrame = .null
+    appliedChrome = nil
+    stopFollowingAnchor()
   }
 
   private func resetProps() {
