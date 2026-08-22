@@ -2,11 +2,16 @@ package expo.modules.universaltooltip
 
 import android.content.Context
 import android.content.res.Resources
-import android.graphics.*
+import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import com.facebook.react.bridge.ReactContext
-import com.skydoves.balloon.*
+import com.skydoves.balloon.ArrowOrientation
+import com.skydoves.balloon.ArrowOrientationRules
+import com.skydoves.balloon.ArrowPositionRules
+import com.skydoves.balloon.Balloon
+import com.skydoves.balloon.BalloonAnimation
+import com.skydoves.balloon.BalloonSizeSpec
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
@@ -17,47 +22,66 @@ import expo.modules.universaltooltip.records.TextStyle
 import expo.modules.universaltooltip.records.convertFontWeightToTypeface
 import kotlin.properties.Delegates
 
+/**
+ * Anchors a Balloon popup to a React trigger.
+ *
+ * React mounts two children: the trigger and — for custom (non-text) popups —
+ * the popup slot. The slot never belongs to this view: it is moved into
+ * [contentHost] the moment it is mounted, so this view stays exactly
+ * trigger-sized and React's own layout is never disturbed. React's child
+ * indices keep working because [UniversalTooltipModule] routes `addView` /
+ * `removeViewAt` through [reactChildren].
+ */
 class UniversalTooltipView(context: Context, appContext: AppContext) :
     ExpoView(context, appContext) {
     companion object {
         const val CONTENT_NATIVE_ID = "universal-tooltip-content"
+        const val BODY_NATIVE_ID = "universal-tooltip-body"
     }
-    private var isViewInvalidated = false
-    private var isInitialized = false
+
     val onTap by EventDispatcher()
     val onDismiss by EventDispatcher()
-    var opened: Boolean by Delegates.observable(
-        false
-    ) { _, _, newValue ->
-        run {
-            if(isInitialized) {
-                if (newValue) {
-                    openTooltip()
-                } else {
-                    dismiss()
-                }
-            }
+
+    var opened: Boolean by Delegates.observable(false) { _, oldValue, newValue ->
+        if (oldValue == newValue) return@observable
+        if (newValue) {
+            openRequested = true
+            post { tryOpen() }
+        } else {
+            dismiss()
         }
     }
-    private var balloon: Balloon? = null
     var side: ContentSide? = null
     var text: String? = null
     var maxWidth: Int =
-        (Resources.getSystem().displayMetrics.widthPixels / Resources.getSystem().displayMetrics.density).toInt()
+        (Resources.getSystem().displayMetrics.widthPixels /
+            Resources.getSystem().displayMetrics.density).toInt()
     var arrowWidth = 10
     var arrowHeight = 5
-    private var arrowSize = (arrowHeight + arrowWidth)/2
     var presetAnimation: PresetAnimation? = null
     var showDuration: Double = 300.0
     var containerStyle: ContainerStyle? = null
     var textStyle: TextStyle? = null
-
     var sideOffset: Int = 5
     var disableTapToDismiss: Boolean = false
     var borderRadius: Float = 5f
     var disableDismissWhenTouchOutside = false
     var bgColor: Int = Color.BLACK
-    var layoutView: View? = null
+
+    private var balloon: Balloon? = null
+    private var openRequested = false
+    private var chromeSignature: String? = null
+    /**
+     * Bumped whenever a Balloon is thrown away for reasons React does not need
+     * to hear about. Its dismiss listener compares against this and stays
+     * quiet, so a rebuild is not reported to JS as the user closing the popup.
+     */
+    private var generation = 0
+    private var contentHost: TooltipRootViewGroup? = null
+    private var slotView: View? = null
+
+    /** React's view of this container's children, in React's own order. */
+    private val reactChildren = mutableListOf<View>()
 
     init {
         clipChildren = false
@@ -65,197 +89,191 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         clipToOutline = false
     }
 
-    // Absolute popup content is a child of this trigger-sized view. Yoga /
-    // Android may report the wrapper as only as tall as the trigger, while
-    // descendants (e.g. a button below the title) still have frames further
-    // down. Walk the tree so Balloon gets the real content box.
-    private fun subtreeExtent(view: View): Pair<Int, Int> {
-        var right = maxOf(view.measuredWidth, view.width)
-        var bottom = maxOf(view.measuredHeight, view.height)
+    /**
+     * Everything Balloon bakes into the popup when it is built. React can
+     * change any of it while the popup is on screen — a theme switch repaints
+     * the bubble — and the only way to follow is to build a new Balloon.
+     */
+    private fun chromeSignature(): String = listOf(
+        bgColor, arrowWidth, arrowHeight, side, borderRadius, text,
+        textStyle?.color, textStyle?.fontSize, textStyle?.fontWeight,
+        containerStyle?.paddingTop, containerStyle?.paddingBottom,
+        containerStyle?.paddingLeft, containerStyle?.paddingRight,
+        maxWidth, presetAnimation
+    ).joinToString("|")
+
+    fun onPropsDidUpdate() {
+        if (balloon?.isShowing != true) return
+        val next = chromeSignature()
+        if (next == chromeSignature) return
+        chromeSignature = next
+        generation++
+        balloon?.dismiss()
+        balloon = null
+        openRequested = true
+        post { tryOpen() }
+    }
+
+    private val density: Float get() = resources.displayMetrics.density
+
+    private fun dpToPx(dp: Int): Int = (dp * density).toInt()
+
+    // region React child management
+
+    private fun nativeIdOf(view: View): String? = try {
+        view.getTag(com.facebook.react.R.id.view_tag_native_id) as? String
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun findByNativeId(view: View, id: String): View? {
+        if (nativeIdOf(view) == id) return view
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
-                val child = view.getChildAt(i) ?: continue
-                val (childWidth, childHeight) = subtreeExtent(child)
-                right = maxOf(right, child.left + childWidth)
-                bottom = maxOf(bottom, child.top + childHeight)
+                findByNativeId(view.getChildAt(i) ?: continue, id)?.let { return it }
             }
-        }
-        return right to bottom
-    }
-
-    private fun nativeIdOf(view: View): String? {
-        return try {
-            view.getTag(com.facebook.react.R.id.view_tag_native_id) as? String
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    private fun isContentSlot(view: View): Boolean {
-        if (nativeIdOf(view) == CONTENT_NATIVE_ID) return true
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                if (nativeIdOf(view.getChildAt(i)) == CONTENT_NATIVE_ID) return true
-            }
-        }
-        return false
-    }
-
-    private fun contentChild(): View? {
-        for (i in 0 until childCount) {
-            val child = getChildAt(i) ?: continue
-            if (isContentSlot(child)) return child
         }
         return null
     }
 
-    private fun anchorView(): View {
-        for (i in 0 until childCount) {
-            val child = getChildAt(i) ?: continue
-            if (!isContentSlot(child)) return child
-        }
-        return this
+    private fun host(): TooltipRootViewGroup {
+        contentHost?.let { return it }
+        val reactContext = context as? ReactContext ?: appContext.reactContext as? ReactContext
+        val created = TooltipRootViewGroup(context, reactContext)
+        contentHost = created
+        return created
     }
 
-    private fun updateContentView() {
-        if (!text.isNullOrEmpty()) return
-        val contentView = contentChild() as? ViewGroup ?: return
-        val inner = contentView.getChildAt(0)
-        // Remeasure without the trigger's height cap so the last children
-        // (buttons, extra lines) are included.
-        // ReactViewGroup.onMeasure rejects UNSPECIFIED — that threw
-        // "A catalyst view must have an explicit width and height" on
-        // the first draw of every custom popup (app open crash).
-        val widthHint = maxOf(contentView.measuredWidth, inner?.measuredWidth ?: 0)
-        if (widthHint <= 0) {
-            return
+    fun addReactChild(child: View, index: Int) {
+        reactChildren.add(index.coerceIn(0, reactChildren.size), child)
+        if (findByNativeId(child, CONTENT_NATIVE_ID) != null) {
+            slotView = child
+            host().addView(child)
+        } else {
+            addView(child, triggerIndexOf(child))
         }
-        val maxH = maxOf(resources.displayMetrics.heightPixels / 2, 1)
-        val widthSpec = MeasureSpec.makeMeasureSpec(widthHint, MeasureSpec.EXACTLY)
-        val heightSpec = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
-        contentView.measure(widthSpec, heightSpec)
-        inner?.measure(widthSpec, heightSpec)
+    }
 
-        val (extentW, extentH) = subtreeExtent(contentView)
-        val width = maxOf(widthHint, extentW, contentView.measuredWidth, inner?.measuredWidth ?: 0)
-        val height = maxOf(extentH, contentView.measuredHeight, inner?.measuredHeight ?: 0)
-        if (width == 0 && height == 0) {
-            // Content hasn't been laid out yet — keep it attached and retry
-            // on the next draw pass.
-            return
+    fun removeReactChildAt(index: Int) {
+        val child = reactChildren.getOrNull(index) ?: return
+        reactChildren.removeAt(index)
+        detach(child)
+    }
+
+    fun removeReactChild(child: View) {
+        reactChildren.remove(child)
+        detach(child)
+    }
+
+    fun reactChildCount(): Int = reactChildren.size
+
+    fun reactChildAt(index: Int): View? = reactChildren.getOrNull(index)
+
+    private fun detach(child: View) {
+        if (child === slotView) {
+            dismiss()
+            slotView = null
         }
-        contentView.layoutParams = LayoutParams(width, height)
-        removeView(contentView)
-        // Host the content in a RootView-implementing container so React
-        // Native touch events (e.g. onPress inside the tooltip) keep working
-        // even though the popup window is outside the React root view.
-        val reactContext = context as? ReactContext
-            ?: appContext.reactContext as? ReactContext
-        val host = TooltipRootViewGroup(context, reactContext)
-        host.clipChildren = false
-        host.clipToPadding = false
-        host.setBackgroundColor(Color.TRANSPARENT)
-        host.layoutParams = LayoutParams(width, height)
-        host.addView(contentView)
-        layoutView = host
+        (child.parent as? ViewGroup)?.removeView(child)
+    }
+
+    /** Physical index of a trigger child, ignoring the slot. */
+    private fun triggerIndexOf(child: View): Int {
+        var physical = 0
+        for (candidate in reactChildren) {
+            if (candidate === child) break
+            if (candidate !== slotView) physical++
+        }
+        return physical.coerceIn(0, childCount)
+    }
+
+    // endregion
+
+    // React Native positions every child itself, so the LinearLayout that
+    // `ExpoView` extends must not measure or arrange them — its horizontal
+    // pass used to push the trigger sideways by the width of its sibling,
+    // which is what cropped the "Show" chips out of their card.
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        setMeasuredDimension(
+            MeasureSpec.getSize(widthMeasureSpec),
+            MeasureSpec.getSize(heightMeasureSpec)
+        )
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        super.onLayout(changed, l, t, r, b)
-        if (changed) {
-            isViewInvalidated = true;
-        }
-        if (opened) {
-           openTooltip()
-        }
-        isInitialized = true
-    }
-    override fun requestLayout() {
-        super.requestLayout()
-        post(measureAndLayout)
-    }
-
-    private val measureAndLayout = Runnable {
-        measure(
-            MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
-        )
-        layout(left, top, right, bottom)
-    }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        super.dispatchDraw(canvas)
-        if (isViewInvalidated) {
-            // Do not extract / remeasure while closed. Parked content is
-            // often still 0×0 (absolute + opacity 0); measuring it with
-            // UNSPECIFIED crashed ReactViewGroup on first paint.
-            if (opened) {
-                updateContentView()
-            }
-            isViewInvalidated = false
-            if (opened && balloon?.isShowing != true) {
-                openTooltip()
-            }
+        if (openRequested && balloon?.isShowing != true) {
+            post { tryOpen() }
         }
     }
 
+    private fun anchorView(): View = getChildAt(0) ?: this
 
-    private fun openTooltip() {
-        if (balloon?.isShowing == true) return
-        if (!text.isNullOrEmpty()) {
-            openByText()
-        } else {
-            // The content view is extracted lazily (during the first draw);
-            // when opening before that happened, extract it now.
-            if (layoutView == null) {
-                updateContentView()
-                isViewInvalidated = false
-            }
-            if (layoutView == null) {
-                // No content mounted yet — dispatchDraw will retry.
-                return
-            }
-            openByContentView()
-        }
+    private fun bodyView(): View? = slotView?.let { findByNativeId(it, BODY_NATIVE_ID) }
+
+    /**
+     * Opens as soon as React has laid out both the trigger and the bubble.
+     * Called again after every layout pass until that is true, so a popup that
+     * mounts opened (`defaultOpen`) is not lost to the first, unmeasured pass.
+     */
+    private fun tryOpen() {
+        if (!openRequested || balloon?.isShowing == true) return
+        if (!isAttachedToWindow) return
         val anchor = anchorView()
+        if (anchor.width == 0 || anchor.height == 0) return
+
+        val balloon = if (!text.isNullOrEmpty()) {
+            buildTextBalloon()
+        } else {
+            buildContentBalloon() ?: return
+        }
+        this.balloon = balloon
+        chromeSignature = chromeSignature()
+
+        val offset = dpToPx(sideOffset)
         when (side) {
-            ContentSide.Top -> balloon?.showAlignTop(anchor, 0, -sideOffset)
-            ContentSide.Bottom -> balloon?.showAlignBottom(anchor, 0, sideOffset)
-            ContentSide.Right -> balloon?.showAlignEnd(anchor, sideOffset, 0)
-            ContentSide.Left -> balloon?.showAlignStart(anchor, -sideOffset, 0)
-            null -> balloon?.showAlignTop(anchor)
+            ContentSide.Bottom -> balloon.showAlignBottom(anchor, 0, offset)
+            ContentSide.Right -> balloon.showAlignEnd(anchor, offset, 0)
+            ContentSide.Left -> balloon.showAlignStart(anchor, -offset, 0)
+            ContentSide.Top, null -> balloon.showAlignTop(anchor, 0, -offset)
         }
     }
 
-    private fun getBalloonAnimation(): BalloonAnimation {
-        return when (presetAnimation) {
-            PresetAnimation.FadeIn -> BalloonAnimation.FADE
-            PresetAnimation.ZoomIn -> BalloonAnimation.OVERSHOOT
-            PresetAnimation.None -> BalloonAnimation.NONE
-            null -> BalloonAnimation.FADE
-        }
+    private fun getBalloonAnimation(): BalloonAnimation = when (presetAnimation) {
+        PresetAnimation.FadeIn -> BalloonAnimation.FADE
+        PresetAnimation.ZoomIn -> BalloonAnimation.OVERSHOOT
+        PresetAnimation.None -> BalloonAnimation.NONE
+        null -> BalloonAnimation.FADE
     }
 
-    private fun getArrowOrientation(): ArrowOrientation {
-        return when (side) {
-            ContentSide.Top -> ArrowOrientation.TOP
-            ContentSide.Bottom -> ArrowOrientation.BOTTOM
-            ContentSide.Right -> ArrowOrientation.START
-            ContentSide.Left -> ArrowOrientation.END
-            null -> ArrowOrientation.TOP
-        }
+    private fun getArrowOrientation(): ArrowOrientation = when (side) {
+        ContentSide.Bottom -> ArrowOrientation.BOTTOM
+        ContentSide.Right -> ArrowOrientation.START
+        ContentSide.Left -> ArrowOrientation.END
+        ContentSide.Top, null -> ArrowOrientation.TOP
     }
+
+    private fun isHorizontal(): Boolean =
+        side == ContentSide.Left || side == ContentSide.Right
 
     // Shared chrome so the body and arrow are one Balloon shape, pinned
-    // to the trigger. Custom content previously skipped these and used
-    // Balloon's defaults (arrow at 50% of the popup, ~4dp corners) on
-    // top of the React view's own radius — that's the mismatched look.
+    // to the trigger.
+    //
+    // `ALIGN_ANCHOR` keeps the arrow on the trigger when the bubble is pushed
+    // inward by a screen edge, but Balloon only resolves it correctly for the
+    // vertical sides — on the horizontal ones it dropped the arrow onto the
+    // bubble's bottom corner. `showAlignStart` / `showAlignEnd` center the
+    // bubble on the trigger anyway, so the balloon's own middle is the right
+    // spot there.
     private fun Balloon.Builder.applyArrowChrome(): Balloon.Builder {
+        val gen = generation
         return this
             .setArrowColor(bgColor)
-            .setArrowSize(arrowSize)
+            .setArrowSize(arrowWidth.coerceAtLeast(1))
             .setArrowPosition(0.5f)
-            .setArrowPositionRules(ArrowPositionRules.ALIGN_ANCHOR)
+            .setArrowPositionRules(
+                if (isHorizontal()) ArrowPositionRules.ALIGN_BALLOON
+                else ArrowPositionRules.ALIGN_ANCHOR
+            )
             .setArrowAlignAnchorPadding(0)
             .setArrowOrientation(getArrowOrientation())
             .setArrowOrientationRules(ArrowOrientationRules.ALIGN_ANCHOR)
@@ -267,46 +285,56 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
                 }
             }
             .setOnBalloonDismissListener {
-                onDismiss(mapOf())
+                if (gen == generation) {
+                    openRequested = false
+                    onDismiss(mapOf())
+                }
             }
             .setBalloonAnimation(getBalloonAnimation())
             .setDismissWhenTouchOutside(!disableDismissWhenTouchOutside)
     }
 
-    private fun openByText() {
-        val pdBottom: Int =
-            if (containerStyle?.paddingBottom == null) 10 else containerStyle?.paddingBottom!!
-        val pdTop =
-            if (containerStyle?.paddingTop == null) 10 else containerStyle?.paddingTop!!
-        val pdLeft =
-            if (containerStyle?.paddingLeft == null) 10 else containerStyle?.paddingLeft!!
-        val pdRight =
-            if (containerStyle?.paddingRight == null) 10 else containerStyle?.paddingRight!!
+    private fun buildTextBalloon(): Balloon {
+        val style = containerStyle
         val fontSize = textStyle?.fontSize?.let { if (it == 0.0f) null else it } ?: 13f
-
-        balloon = Balloon.Builder(context)
+        return Balloon.Builder(context)
             .setText(text!!)
-            .setTextColor(textStyle?.color ?: -16777216)
+            .setTextColor(textStyle?.color ?: Color.BLACK)
             .setTextSize(fontSize)
             .setTextGravity(android.view.Gravity.START)
             .setTextTypeface(convertFontWeightToTypeface(textStyle?.fontWeight ?: "normal"))
             .setMaxWidth(maxWidth)
-            .setPaddingBottom(pdBottom)
-            .setPaddingTop(pdTop)
-            .setPaddingLeft(pdLeft)
-            .setPaddingRight(pdRight)
+            .setPaddingTop(style?.paddingTop ?: 10)
+            .setPaddingBottom(style?.paddingBottom ?: 10)
+            .setPaddingLeft(style?.paddingLeft ?: 10)
+            .setPaddingRight(style?.paddingRight ?: 10)
             .setBackgroundColor(bgColor)
             .setCornerRadius(borderRadius)
             .applyArrowChrome()
             .build()
     }
 
-    private fun openByContentView() {
-        // Custom content already paints its own fill and radius. A second
-        // Balloon body clipped those children (the Confirm button). Only
-        // the arrow is native; the React tree is the body.
-        balloon = Balloon.Builder(context)
-            .setLayout(layoutView!!)
+    /**
+     * Custom content already paints its own fill and radius, so the Balloon
+     * body is transparent and zero-padded — only the arrow is native.
+     * Returns null while React has not laid the bubble out yet; [onLayout]
+     * retries.
+     */
+    private fun buildContentBalloon(): Balloon? {
+        val host = contentHost ?: return null
+        val body = bodyView() ?: return null
+        if (body.width == 0 || body.height == 0) return null
+
+        val slot = slotView
+        val offsetLeft = if (slot == null) body.left else bodyOffsetX(body, slot)
+        val offsetTop = if (slot == null) body.top else bodyOffsetY(body, slot)
+        host.setBubbleFrame(offsetLeft, offsetTop, body.width, body.height)
+        // A Balloon keeps its content view attached until it is garbage
+        // collected; detach before handing the same host to the next one.
+        (host.parent as? ViewGroup)?.removeView(host)
+
+        return Balloon.Builder(context)
+            .setLayout(host)
             .setWidth(BalloonSizeSpec.WRAP)
             .setHeight(BalloonSizeSpec.WRAP)
             .setPadding(0)
@@ -317,8 +345,30 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
             .build()
     }
 
+    private fun bodyOffsetX(body: View, slot: View): Int {
+        var offset = 0
+        var view: View? = body
+        while (view != null && view !== slot) {
+            offset += view.left
+            view = view.parent as? View
+        }
+        return offset
+    }
+
+    private fun bodyOffsetY(body: View, slot: View): Int {
+        var offset = 0
+        var view: View? = body
+        while (view != null && view !== slot) {
+            offset += view.top
+            view = view.parent as? View
+        }
+        return offset
+    }
+
     private fun dismiss() {
+        openRequested = false
         balloon?.dismiss()
+        balloon = null
     }
 
     override fun onDetachedFromWindow() {

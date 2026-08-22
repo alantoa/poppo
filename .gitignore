@@ -61,5 +61,8 @@ android/keystores/debug.keystore
 .expo/*
 dev-types.txt 
 .env 
-ios
-android
+# The example app's generated native projects — not the library's own
+# `ios/` and `android/` sources, which are the package itself.
+example/ios
+example/android
+android/build

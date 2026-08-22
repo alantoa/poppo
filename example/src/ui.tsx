@@ -131,19 +131,34 @@ const buttonLabel = (theme: Theme, variant: "solid" | "ghost"): TextStyle => ({
   letterSpacing: -0.2,
 });
 
+// Pressed state is tracked by hand instead of through Pressable's
+// `style={({ pressed }) => ...}` callback: NativeWind wraps Pressable and
+// drops function styles, which left every button in this playground with no
+// surface at all.
 export const Button = ({
   label,
   variant = "ghost",
   style,
+  onPressIn,
+  onPressOut,
   ...rest
 }: PressableProps & { label: string; variant?: "solid" | "ghost" }) => {
   const theme = useTheme();
+  const [pressed, setPressed] = React.useState(false);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       {...rest}
-      style={({ pressed }) => [
+      onPressIn={(event) => {
+        setPressed(true);
+        onPressIn?.(event);
+      }}
+      onPressOut={(event) => {
+        setPressed(false);
+        onPressOut?.(event);
+      }}
+      style={[
         buttonSurface(theme, pressed, variant),
         { opacity: rest.disabled ? 0.4 : 1 },
         style as ViewStyle,

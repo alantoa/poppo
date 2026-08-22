@@ -1,153 +1,125 @@
 import ExpoModulesCore
+import UIKit
 
-import Popovers
-import SwiftUI
+/// Full-window container for a presented popup.
+///
+/// It only swallows touches that land outside the bubble, and only while an
+/// outside tap is meant to dismiss — otherwise the app underneath keeps
+/// working exactly as it did before the popup opened.
+final class TooltipOverlayView: UIView {
+  weak var owner: UniversalTooltipView?
+  var dismissesOnOutsideTap = true
 
-final class TooltipContentHost: UIView {
-  private var frameObserver: NSKeyValueObservation?
-
-  func attach(_ content: UIView) {
-    if content.superview !== self {
-      content.removeFromSuperview()
-      addSubview(content)
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    guard let hit = super.hitTest(point, with: event) else { return nil }
+    if hit === self {
+      return dismissesOnOutsideTap ? self : nil
     }
-    content.transform = .identity
-    content.alpha = 1
-    content.isUserInteractionEnabled = true
-    content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    pin(content)
-    frameObserver = content.observe(\.frame, options: [.new]) { [weak self] view, _ in
-      guard let self else { return }
-      if view.frame != self.bounds {
-        self.pin(view)
-      }
-    }
+    return hit
   }
 
-  private func pin(_ content: UIView) {
-    content.transform = .identity
-    if bounds.width > 0, bounds.height > 0 {
-      content.frame = bounds
-    }
-  }
-
-  override func layoutSubviews() {
-    super.layoutSubviews()
-    if let content = subviews.first {
-      pin(content)
-    }
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    super.touchesEnded(touches, with: event)
+    owner?.handleOutsideTap()
   }
 }
 
-struct RepresentedUIView: UIViewRepresentable {
-  var contentView: UIView
+/// CADisplayLink retains its target, so it is given a proxy: a view that is
+/// torn down while a popup is on screen must still be able to deallocate.
+private final class DisplayLinkProxy: NSObject {
+  weak var target: UniversalTooltipView?
 
-  func makeUIView(context: Context) -> TooltipContentHost {
-    let host = TooltipContentHost()
-    host.backgroundColor = .clear
-    host.clipsToBounds = false
-    host.attach(contentView)
-    return host
+  init(target: UniversalTooltipView) {
+    self.target = target
   }
 
-  func updateUIView(_ host: TooltipContentHost, context: Context) {
-    host.attach(contentView)
+  @objc func tick() {
+    target?.onDisplayLink()
   }
 }
 
-struct PopoverModifier: ViewModifier {
-  let isActive: Bool
-  let side: ContentSide
-  let offset: CGFloat = 10
-  let presetAnimation: PresetAnimation
-  func body(content: Content) -> some View {
-    switch presetAnimation {
-      case .zoomIn:
-        content
-          .scaleEffect(self.isActive ? 1 : 0)
-          .animation(.spring())
-      default:
-        content
-          .opacity(self.isActive ? 1: 0)
-          .offset(x: self.side.toSideOffsetX(offset: offset, isActive: isActive), y: self.side.toSideOffsetY(offset: offset, isActive:isActive))
-    }
-
-  }
-}
-
-
-
+/// Anchors a popup — a natively drawn text bubble, or arbitrary React Native
+/// content — to a trigger rendered by React.
+///
+/// React mounts two children: the trigger, and (for custom content) the popup
+/// slot. The slot never becomes a subview of this view: it is moved into
+/// `contentHost` when it mounts and only ever travels between that host and
+/// the presented bubble. React keeps laying it out either way — Fabric writes
+/// frames straight onto the views — so the bubble is fully measured before it
+/// is ever shown, and React's own child bookkeeping is never disturbed.
 class UniversalTooltipView: ExpoView {
-  var contentView: UIView?
+  static let contentNativeID = "universal-tooltip-content"
+  static let bodyNativeID = "universal-tooltip-body"
+
+  /// Keeps the bubble off the display edge.
+  private static let edgePadding: CGFloat = 8
+  /// Stop retrying a present that never becomes possible.
+  private static let openTimeout: CFTimeInterval = 2
+
+  // MARK: - Props
+
   var bubbleBackgroundColor: UIColor = .clear
   var side: ContentSide = .any
-  var presetAnimation : PresetAnimation = .fadeIn
-  var showDuration: CGFloat = CGFloat(0.3)
-  var dismissDuration: CGFloat = CGFloat(0.3)
-  var cornerRadius : CGFloat = CGFloat(5)
-  var text :String? = nil
-  var maxWidth : Double?
-  var contentWidth: Double = 0
-  var contentHeight: Double = 0 {
-    didSet {
-      if opened && !isPresented && contentHeight > 0 {
-        scheduleOpen()
-      }
-    }
-  }
+  var presetAnimation: PresetAnimation = .fadeIn
+  var showDuration: CGFloat = 0.3
+  var dismissDuration: CGFloat = 0.3
+  var cornerRadius: CGFloat = 5
+  var text: String?
+  var maxWidth: Double?
   var arrowWidth: Double = 20
   var arrowHeight: Double = 10
-  var containerStyle : ContainerStyle?
-  var textStyle : TextStyle =  TextStyle(fontSize: 14, color: .black, fontWeight: "normal")
-  var sideOffset : CGFloat = 1
-  var opened: Bool = false {
-    didSet {
-      guard oldValue != opened else { return }
-      if opened {
-        scheduleOpen()
-      } else {
-        openWorkItem?.cancel()
-        openWorkItem = nil
-        dismiss()
-      }
-    }
-  }
-  let onDismiss = EventDispatcher()
-  let onTap = EventDispatcher()
+  var containerStyle: ContainerStyle?
+  var textStyle = TextStyle(fontSize: 14, color: .black, fontWeight: "normal")
+  var sideOffset: CGFloat = 1
   var disableTapToDismiss = false
   var disableDrag = false
   var disableDismissWhenTouchOutside = false
-  var popover: Popover?
+
+  var opened = false {
+    didSet {
+      guard oldValue != opened else { return }
+      if opened {
+        requestOpen()
+      } else {
+        dismiss(notify: false)
+      }
+    }
+  }
+
+  let onDismiss = EventDispatcher()
+  let onTap = EventDispatcher()
+
+  // MARK: - State
+
+  /// React's view of this container's children, in React's own order.
+  private var reactChildren: [UIView] = []
+  private var slotView: UIView?
+  private let contentHost = UIView()
   private var touchHandler: NSObject?
+
+  private var overlay: TooltipOverlayView?
+  private var bubbleContainer: UIView?
+  private var shapeView: TooltipShapeView?
+  private var label: UILabel?
+
   private var isPresented = false
-  private var openWorkItem: DispatchWorkItem?
+  private var openRequested = false
+  private var openDeadline: CFTimeInterval = 0
+  private var displayLink: CADisplayLink?
+  private var lastSourceFrame: CGRect = .null
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
-    // Parked custom content is opacity 0. Do not clip — a trigger-sized
-    // clip + Fabric culling skips later children (Confirm Pressables).
     clipsToBounds = false
+    contentHost.clipsToBounds = false
+    contentHost.backgroundColor = .clear
   }
 
-  /// Custom content often reports title-only height on the first layout
-  /// pass. Popover snapshots `body` as AnyView at present time, so wait
-  /// one frame for Pressables before locking the SwiftUI frame.
-  private func scheduleOpen() {
-    guard opened, !isPresented else { return }
-    if hasNativeText {
-      openTooltip()
-      return
-    }
-    openWorkItem?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      self?.openWorkItem = nil
-      self?.openTooltip()
-    }
-    openWorkItem = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: work)
+  deinit {
+    displayLink?.invalidate()
   }
 
-  private static let contentNativeID = "universal-tooltip-content"
+  // MARK: - React children
 
   private func nativeID(of view: UIView) -> String? {
     for key in ["nativeID", "nativeId"] {
@@ -163,70 +135,61 @@ class UniversalTooltipView: ExpoView {
     return nil
   }
 
-  private func isContentSlot(_ view: UIView) -> Bool {
-    if nativeID(of: view) == Self.contentNativeID {
-      return true
+  private func findView(in view: UIView, nativeID id: String) -> UIView? {
+    if nativeID(of: view) == id {
+      return view
     }
-    // Fabric may wrap the marked host in extra RCT views.
-    return view.subviews.contains { isContentSlot($0) }
+    for sub in view.subviews {
+      if let found = findView(in: sub, nativeID: id) {
+        return found
+      }
+    }
+    return nil
   }
 
-  // Content is identified by nativeID, never by child index. Treating
-  // index 0 as the popup hid the trigger whenever Fabric mounted the
-  // button first (theme remounts, concurrent render).
-  override func mountChildComponentView(_ childComponentView: UIView, index: Int) {
-    // Every child goes through super so RCTViewComponentView's index
-    // bookkeeping stays consistent — withholding a child shifts the sibling
-    // indexes and unmounting a later sibling throws NSRangeException.
-    //
-    // While the popup is presented, SwiftUI reparents the content slot into
-    // the popover, so `subviews` can temporarily hold fewer children than
-    // Fabric believes — clamp the index instead of letting UIKit throw.
-    if index > subviews.count {
-      insertSubview(childComponentView, at: subviews.count)
-    } else {
-      super.mountChildComponentView(childComponentView, index: index)
+  /// Position of a trigger child among the views that stay in this container.
+  private func triggerIndex(of child: UIView) -> Int {
+    var index = 0
+    for candidate in reactChildren {
+      if candidate === child { break }
+      if candidate !== slotView { index += 1 }
     }
-    if isContentSlot(childComponentView) {
-      contentView = childComponentView
-      parkContent()
+    return min(index, subviews.count)
+  }
+
+  // Content is identified by nativeID, never by child index: Fabric mounts the
+  // trigger first on some passes and the popup first on others. `super` is
+  // deliberately not called — it asserts that every child is a subview at
+  // exactly `index`, which cannot hold while the popup lives in its own host.
+  override func mountChildComponentView(_ childComponentView: UIView, index: Int) {
+    reactChildren.insert(childComponentView, at: max(0, min(index, reactChildren.count)))
+    if findView(in: childComponentView, nativeID: Self.contentNativeID) != nil {
+      slotView = childComponentView
+      childComponentView.removeFromSuperview()
+      contentHost.addSubview(childComponentView)
       attachTouchHandler(to: childComponentView)
     } else {
-      childComponentView.alpha = 1
-      childComponentView.isUserInteractionEnabled = true
+      insertSubview(childComponentView, at: triggerIndex(of: childComponentView))
     }
   }
 
   override func unmountChildComponentView(_ childComponentView: UIView, index: Int) {
-    if childComponentView == contentView {
+    if let existing = reactChildren.firstIndex(of: childComponentView) {
+      reactChildren.remove(at: existing)
+    }
+    if childComponentView === slotView {
       detachTouchHandler(from: childComponentView)
-      contentView = nil
-      if isPresented {
-        dismiss()
-      }
+      slotView = nil
+      dismiss(notify: false)
     }
-    // While the popup is presented (or right after a dismissal), the content
-    // slot lives inside the popover instead of this view, which breaks
-    // RCTViewComponentView's `subviews[index]` bookkeeping and would throw
-    // NSRangeException (e.g. remounting the whole tree on a theme change).
-    // When the bookkeeping no longer matches, detach manually instead.
-    let bookkeepingMatches =
-      childComponentView.superview === self
-      && index < subviews.count
-      && subviews[index] === childComponentView
-    if bookkeepingMatches {
-      super.unmountChildComponentView(childComponentView, index: index)
-    } else {
-      childComponentView.removeFromSuperview()
-    }
+    childComponentView.removeFromSuperview()
   }
 
-  // The tooltip content is rendered inside the popover, outside the React
-  // root view, so React Native's touch pipeline can't see it. Attaching a
-  // dedicated RCTSurfaceTouchHandler (the same mechanism RCTModalHostView
-  // uses) restores JS touch events (onPress etc.) inside the tooltip.
-  // The class is resolved at runtime to avoid a hard header dependency on
-  // React-RCTFabric, which may ship as a prebuilt framework.
+  // The popup is rendered outside the React root view, so React Native's touch
+  // pipeline cannot see it. Attaching a dedicated RCTSurfaceTouchHandler — the
+  // same mechanism RCTModalHostView uses — restores onPress and friends inside
+  // the bubble. The class is resolved at runtime to avoid a hard header
+  // dependency on React-RCTFabric, which may ship as a prebuilt framework.
   private func attachTouchHandler(to view: UIView) {
     guard touchHandler == nil,
           let handlerClass = NSClassFromString("RCTSurfaceTouchHandler") as? NSObject.Type else {
@@ -234,25 +197,9 @@ class UniversalTooltipView: ExpoView {
     }
     let handler = handlerClass.init()
     let attachSelector = Selector(("attachToView:"))
-    guard handler.responds(to: attachSelector) else {
-      return
-    }
+    guard handler.responds(to: attachSelector) else { return }
     _ = handler.perform(attachSelector, with: view)
     touchHandler = handler
-  }
-
-  private func parkContent() {
-    guard let content = contentView else { return }
-    if content.superview !== self {
-      insertSubview(content, at: 0)
-    }
-    // Keep the view in the Yoga tree (no isHidden) so children still
-    // measure. Do not apply a CGAffineTransform — Fabric overwrites it
-    // from JS style and the view can jump to the window origin (that's
-    // the Wi‑Fi icon on the status bar).
-    content.transform = .identity
-    content.alpha = 0
-    content.isUserInteractionEnabled = false
   }
 
   private func detachTouchHandler(from view: UIView) {
@@ -263,347 +210,427 @@ class UniversalTooltipView: ExpoView {
     touchHandler = nil
   }
 
-  private func closestViewController() -> UIViewController? {
-    var responder: UIResponder? = self
-    while let currentResponder = responder {
-      if let viewController = currentResponder as? UIViewController {
-        return viewController
-      }
-      responder = currentResponder.next
-    }
-    return nil
-  }
-
-  /// Prefer the trigger (the non-content child). Using the whole Expo view
-  /// as the source would include the absolutely-positioned popup wrapper and
-  /// pin the arrow to that larger box instead of the button.
-  private var triggerView: UIView? {
-    subviews.first { $0 !== contentView }
-  }
-
-  /// The Expo view is trigger-sized (`alignSelf: flex-start` + clipped).
-  /// Do not walk into descendants — after a reparent, a deep child can
-  /// report a window frame on the status bar.
-  private func resolvedTrigger() -> UIView {
-    triggerView ?? self
-  }
-
-  /// `convert(_:to: nil)` is window coordinates only after this view is
-  /// in a window and laid out. A zero / status-bar frame is what pinned
-  /// the Rich Wi‑Fi bubble to the battery icons.
-  private func resolvedSourceFrame() -> CGRect? {
-    guard let window else { return nil }
-    let trigger = resolvedTrigger()
-    let source = trigger.convert(trigger.bounds, to: window)
-    let statusBar = window.safeAreaInsets.top
-    // The trigger lives in the page, below the safe area. A frame that
-    // sits in the status bar is `convert(_:to:)` on a reparented view
-    // (the parked Rich content), not the Show button.
-    guard source.width >= 16,
-          source.height >= 16,
-          source.minY >= statusBar else {
-      return nil
-    }
-    return source
-  }
-
-  /// Shift the arrow from the bubble center so it stays on the trigger
-  /// center when the popover is pushed inward to stay on-screen.
-  ///
-  /// `context.frame` is `.zero` until Popovers finishes `sizeReader`.
-  /// Treating that as a real frame shoved the arrow to the far edge
-  /// (source.midX - 0) and the triangle ate the right-hand corners.
-  private func arrowOffset(source: CGRect, popover: CGRect, contentSize: CGSize) -> CGSize {
-    guard popover.width > 1, popover.height > 1 else { return .zero }
-    let inset = max(cornerRadius, 6)
-    switch side {
-    case .left, .right:
-      let raw = source.midY - popover.midY
-      let limit = max(0, contentSize.height / 2 - CGFloat(arrowWidth) / 2 - inset)
-      return CGSize(width: 0, height: min(max(raw, -limit), limit))
-    default:
-      let raw = source.midX - popover.midX
-      let limit = max(0, contentSize.width / 2 - CGFloat(arrowWidth) / 2 - inset)
-      return CGSize(width: min(max(raw, -limit), limit), height: 0)
-    }
-  }
-
-  private func arrowEdgeOffset(source: CGRect, popover: CGRect, contentSize: CGSize) -> CGFloat {
-    let offset = arrowOffset(source: source, popover: popover, contentSize: contentSize)
-    switch side {
-    case .left, .right:
-      return offset.height
-    default:
-      return offset.width
-    }
-  }
-
-  @ViewBuilder
-  private func arrowLayer(contentSize: CGSize, context: Popover.Context) -> some View {
-    let offset = arrowOffset(
-      source: context.attributes.sourceFrame(),
-      popover: context.frame,
-      contentSize: contentSize
-    )
-    ArrowShape(
-      arrowDirection: side,
-      arrowSize: CGSize(width: arrowWidth, height: arrowHeight),
-      curveRadius: 4
-    )
-    .fill(Color(bubbleBackgroundColor))
-    .frame(width: contentSize.width, height: contentSize.height)
-    .offset(x: offset.width, y: offset.height)
-    .allowsHitTesting(false)
-  }
-
-  func fallbackTooltip() -> some View {
-    let top = containerStyle?.paddingTop ?? 10.0
-    let right = containerStyle?.paddingRight ?? 10.0
-    let bottom = containerStyle?.paddingBottom ?? 10.0
-    let left = containerStyle?.paddingLeft ?? 10.0
-
-    return PopoverReader { context in
-      // Do not put a GeometryReader in the background. It takes the
-      // proposed width (the window), so sizeReader thought the bubble
-      // was ~402pt wide, parked it on the left, and jammed the arrow
-      // into the right-hand corners.
-      let size = context.frame.size
-      let edge = self.arrowEdgeOffset(
-        source: context.attributes.sourceFrame(),
-        popover: context.frame,
-        contentSize: size.width > 1 ? size : CGSize(width: 1, height: 1)
-      )
-      Text(self.text ?? "")
-        .font(.system(size: CGFloat(self.textStyle.fontSize), weight: fontWeightToSwiftUI(self.textStyle.fontWeight), design: .default))
-        .multilineTextAlignment(.leading)
-        // maxWidth is a wrap cap only. `.frame(maxWidth:)` alone expands to
-        // the proposed size (usually the screen), which made short labels
-        // sit in a 260pt-wide bubble. Hug the text, then cap wrapping.
-        .frame(maxWidth: self.maxWidth.map { CGFloat($0) }, alignment: .leading)
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(EdgeInsets(top: top, leading: left, bottom: bottom, trailing: right))
-        .foregroundColor(Color(self.textStyle.color))
-        .background(
-          TooltipBubbleShape(
-            arrowDirection: self.side,
-            arrowSize: CGSize(width: self.arrowWidth, height: self.arrowHeight),
-            cornerRadius: self.cornerRadius,
-            arrowOffset: edge
-          )
-          .fill(Color(self.bubbleBackgroundColor))
-        )
-        // Reserve layout space so the protruding arrow is not clipped
-        // and sizeReader includes it. Custom content keeps the arrow
-        // outside the RN view, so only the text bubble does this.
-        .padding(.top, self.side == .bottom ? self.arrowHeight : 0)
-        .padding(.bottom, (self.side == .top || self.side == .any) ? self.arrowHeight : 0)
-        .padding(.leading, self.side == .right ? self.arrowHeight : 0)
-        .padding(.trailing, self.side == .left ? self.arrowHeight : 0)
-    }
-  }
+  // MARK: - Geometry
 
   private var hasNativeText: Bool {
     if let text, !text.isEmpty { return true }
     return false
   }
 
-  // The bubble (background, corner radius, padding, ...) is rendered by React
-  // Native itself, so the full ViewStyle works out of the box. The native side
-  // only draws the arrow, filled with the color derived from the content's
-  // `style.backgroundColor` on the JS side.
-  //
-  // Text-only popups must always use `fallbackTooltip`. After a remount
-  // (e.g. theme change) the zero-size JS placeholder can inherit the
-  // trigger's frame; treating that as custom content draws only the arrow.
-  private func subtreeExtent(of view: UIView) -> CGSize {
-    var width = max(view.bounds.width, view.frame.width)
-    var height = max(view.bounds.height, view.frame.height)
-    for sub in view.subviews where !sub.isHidden {
-      let child = subtreeExtent(of: sub)
-      width = max(width, sub.frame.minX + child.width)
-      height = max(height, sub.frame.minY + child.height)
-    }
-    return CGSize(width: width, height: height)
+  /// The trigger, never the popup: using the whole Expo view as the source
+  /// would include the popup wrapper and pin the arrow to that larger box.
+  private var triggerView: UIView? {
+    subviews.first { $0 !== contentHost }
   }
 
-  private func resolvedContentSize() -> CGSize {
-    guard let content = contentView else { return .zero }
-    let laidOut = subtreeExtent(of: content)
-    var width = contentWidth > 0 ? max(laidOut.width, CGFloat(contentWidth)) : laidOut.width
-    var height = contentHeight > 0 ? max(laidOut.height, CGFloat(contentHeight)) : laidOut.height
-    // Absolute + flex:1 measured as ~window height (64×774). Popovers
-    // then placed that strip above the trigger and clamped it onto the
-    // status bar — which is the stray Wi‑Fi icon.
-    let maxH = (window?.bounds.height ?? 800) * 0.5
-    let maxW = (window?.bounds.width ?? 400) * 0.92
-    if height > maxH {
-      let inner = content.subviews.first.map { subtreeExtent(of: $0).height } ?? 0
-      height = inner > 8 && inner <= maxH ? inner : min(height, 120)
-    }
-    if width > maxW {
-      width = min(max(laidOut.width, 64), maxW)
-    }
-    return CGSize(width: width, height: height)
+  /// `convert(_:to:)` only returns window coordinates once this view is in a
+  /// window and laid out; anything else is not a real anchor yet.
+  private func sourceFrame() -> CGRect? {
+    guard let window, bounds.width > 0, bounds.height > 0 else { return nil }
+    let trigger = triggerView ?? self
+    let frame = trigger.convert(trigger.bounds, to: window)
+    guard frame.width > 0, frame.height > 0 else { return nil }
+    return frame
   }
 
-  var body: some View {
-    Group {
-      if hasNativeText {
-        fallbackTooltip().onTapGesture {
-          self.onTap()
-        }
-      } else if let validContentView = contentView {
-        let contentSize = resolvedContentSize()
-        if contentSize != .zero {
-          // Do not add `.onTapGesture` here. SwiftUI eats the hit so RN
-          // Pressables inside the bubble never receive onPress.
-          PopoverReader { context in
-            RepresentedUIView(contentView: validContentView)
-              .frame(width: contentSize.width, height: contentSize.height)
-              .background(self.arrowLayer(contentSize: contentSize, context: context))
-          }
-        } else {
-          fallbackTooltip().onTapGesture {
-            self.onTap()
-          }
-        }
-      } else {
-        fallbackTooltip().onTapGesture {
-          self.onTap()
-        }
+  /// The React view that paints the bubble. The slot around it is a
+  /// window-wide measuring box (see `popupSlotStyle` on the JS side).
+  private func bodyView() -> UIView? {
+    guard let slotView else { return nil }
+    return findView(in: slotView, nativeID: Self.bodyNativeID) ?? slotView.subviews.first
+  }
+
+  private func textBubbleSize(availableWidth: CGFloat) -> CGSize {
+    let insets = paddingInsets()
+    let font = textStyle.resolvedFont()
+    var wrapWidth = availableWidth - insets.left - insets.right
+    if let maxWidth, maxWidth > 0 {
+      wrapWidth = min(wrapWidth, CGFloat(maxWidth) - insets.left - insets.right)
+    }
+    wrapWidth = max(wrapWidth, 1)
+    let bounding = (text ?? "").boundingRect(
+      with: CGSize(width: wrapWidth, height: .greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: [.font: font],
+      context: nil
+    )
+    return CGSize(
+      width: ceil(bounding.width) + insets.left + insets.right,
+      height: ceil(bounding.height) + insets.top + insets.bottom
+    )
+  }
+
+  /// Where the bubble sits inside its slot. Normally the origin, but the
+  /// popup's own styles can nudge it.
+  private func bodyOffsetInSlot() -> CGPoint {
+    guard let slotView, let body = bodyView(), body !== slotView else { return .zero }
+    return body.convert(CGPoint.zero, to: slotView)
+  }
+
+  private func paddingInsets() -> UIEdgeInsets {
+    UIEdgeInsets(
+      top: containerStyle?.paddingTop ?? 10,
+      left: containerStyle?.paddingLeft ?? 10,
+      bottom: containerStyle?.paddingBottom ?? 10,
+      right: containerStyle?.paddingRight ?? 10
+    )
+  }
+
+  private struct Placement {
+    let side: ContentSide
+    let frame: CGRect
+    /// Where the arrow points, in the bubble's own coordinate space.
+    let arrowCenter: CGFloat
+  }
+
+  /// Places `size` next to `source`, flipping to the opposite side when the
+  /// requested one does not fit and clamping the bubble inside the safe area.
+  private func placement(for size: CGSize, source: CGRect, in window: UIWindow) -> Placement {
+    let pad = Self.edgePadding
+    let insets = window.safeAreaInsets
+    let limits = CGRect(
+      x: insets.left + pad,
+      y: insets.top + pad,
+      width: max(window.bounds.width - insets.left - insets.right - pad * 2, 1),
+      height: max(window.bounds.height - insets.top - insets.bottom - pad * 2, 1)
+    )
+    let gap = sideOffset + CGFloat(arrowHeight)
+
+    func fits(_ candidate: ContentSide) -> Bool {
+      switch candidate {
+      case .top, .any: return source.minY - gap - size.height >= limits.minY
+      case .bottom: return source.maxY + gap + size.height <= limits.maxY
+      case .left: return source.minX - gap - size.width >= limits.minX
+      case .right: return source.maxX + gap + size.width <= limits.maxX
+      }
+    }
+
+    var resolved = side.resolved
+    if !fits(resolved), fits(resolved.opposite) {
+      resolved = resolved.opposite
+    }
+
+    var origin = CGPoint.zero
+    switch resolved {
+    case .top, .any:
+      origin = CGPoint(x: source.midX - size.width / 2, y: source.minY - gap - size.height)
+    case .bottom:
+      origin = CGPoint(x: source.midX - size.width / 2, y: source.maxY + gap)
+    case .left:
+      origin = CGPoint(x: source.minX - gap - size.width, y: source.midY - size.height / 2)
+    case .right:
+      origin = CGPoint(x: source.maxX + gap, y: source.midY - size.height / 2)
+    }
+
+    // Clamp along the cross axis only — moving along the main axis would
+    // detach the bubble from the trigger it belongs to.
+    if resolved.isHorizontal {
+      origin.y = clamp(origin.y, limits.minY, max(limits.maxY - size.height, limits.minY))
+    } else {
+      origin.x = clamp(origin.x, limits.minX, max(limits.maxX - size.width, limits.minX))
+    }
+
+    let frame = CGRect(origin: origin, size: size)
+    let arrowCenter = TooltipShape.clampArrowCenter(
+      resolved.isHorizontal ? source.midY - frame.minY : source.midX - frame.minX,
+      rect: CGRect(origin: .zero, size: size),
+      side: resolved,
+      arrowWidth: CGFloat(arrowWidth),
+      cornerRadius: cornerRadius
+    )
+    return Placement(side: resolved, frame: frame, arrowCenter: arrowCenter)
+  }
+
+  private func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
+    guard upper >= lower else { return lower }
+    return min(max(value, lower), upper)
+  }
+
+  // MARK: - Presenting
+
+  private func requestOpen() {
+    openRequested = true
+    openDeadline = CACurrentMediaTime() + Self.openTimeout
+    startDisplayLink()
+    // A popup opened straight from a press can usually present on the spot;
+    // the display link only covers the passes where React has not measured
+    // the bubble yet.
+    tryPresent()
+  }
+
+  private func startDisplayLink() {
+    guard displayLink == nil else { return }
+    let link = CADisplayLink(
+      target: DisplayLinkProxy(target: self),
+      selector: #selector(DisplayLinkProxy.tick)
+    )
+    link.add(to: .main, forMode: .common)
+    displayLink = link
+  }
+
+  private func stopDisplayLink() {
+    displayLink?.invalidate()
+    displayLink = nil
+  }
+
+  @objc fileprivate func onDisplayLink() {
+    if isPresented {
+      updatePlacement()
+      return
+    }
+    guard openRequested else {
+      stopDisplayLink()
+      return
+    }
+    if CACurrentMediaTime() > openDeadline {
+      openRequested = false
+      stopDisplayLink()
+      return
+    }
+    tryPresent()
+  }
+
+  private func tryPresent() {
+    guard openRequested, !isPresented else { return }
+    guard let window, let source = sourceFrame() else { return }
+
+    let size: CGSize
+    if hasNativeText {
+      size = textBubbleSize(availableWidth: window.bounds.width - Self.edgePadding * 2)
+    } else {
+      guard let body = bodyView(), body.bounds.width > 1, body.bounds.height > 1 else { return }
+      size = body.bounds.size
+    }
+    guard size.width > 1, size.height > 1 else { return }
+
+    let overlay = TooltipOverlayView(frame: window.bounds)
+    overlay.owner = self
+    overlay.backgroundColor = .clear
+    overlay.clipsToBounds = false
+    overlay.dismissesOnOutsideTap = !disableDismissWhenTouchOutside
+    overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+    let container = UIView()
+    container.clipsToBounds = false
+    container.backgroundColor = .clear
+    overlay.addSubview(container)
+
+    let shape = TooltipShapeView()
+    shape.shapeLayer.fillColor = bubbleBackgroundColor.cgColor
+    container.addSubview(shape)
+
+    if hasNativeText {
+      let textLabel = UILabel()
+      textLabel.numberOfLines = 0
+      textLabel.lineBreakMode = .byWordWrapping
+      textLabel.textAlignment = .left
+      textLabel.font = textStyle.resolvedFont()
+      textLabel.textColor = textStyle.color
+      textLabel.text = text
+      container.addSubview(textLabel)
+      label = textLabel
+      let tap = UITapGestureRecognizer(target: self, action: #selector(handleBubbleTap))
+      container.addGestureRecognizer(tap)
+    } else {
+      container.addSubview(contentHost)
+    }
+
+    window.addSubview(overlay)
+    self.overlay = overlay
+    bubbleContainer = container
+    shapeView = shape
+    isPresented = true
+    openRequested = false
+    lastSourceFrame = .null
+
+    applyPlacement(placement(for: size, source: source, in: window))
+    animateIn(container)
+    startDisplayLink()
+  }
+
+  /// Re-runs the geometry against the trigger's current position, so a popup
+  /// stays glued to its anchor while the page behind it scrolls.
+  private func updatePlacement() {
+    guard isPresented, let window, let container = bubbleContainer else { return }
+    guard let source = sourceFrame(), source.intersects(window.bounds) else {
+      // The trigger scrolled out of the screen — a popup with nothing left to
+      // point at just clamps itself to an edge, so close it instead.
+      dismiss(notify: true)
+      return
+    }
+    let size: CGSize
+    if hasNativeText {
+      size = container.bounds.size
+    } else {
+      guard let body = bodyView(), body.bounds.width > 1, body.bounds.height > 1 else { return }
+      size = body.bounds.size
+    }
+    guard source != lastSourceFrame || size != container.bounds.size else { return }
+    lastSourceFrame = source
+    applyPlacement(placement(for: size, source: source, in: window))
+  }
+
+  private func applyPlacement(_ placement: Placement) {
+    guard let container = bubbleContainer, let shape = shapeView else { return }
+    lastSourceFrame = sourceFrame() ?? lastSourceFrame
+
+    // bounds + center rather than frame: the container may be mid-animation
+    // with a scale transform, and assigning `frame` would cancel it.
+    container.bounds = CGRect(origin: .zero, size: placement.frame.size)
+    container.center = CGPoint(x: placement.frame.midX, y: placement.frame.midY)
+
+    let bounds = CGRect(origin: .zero, size: placement.frame.size)
+    shape.frame = bounds
+    let arrowSize = CGSize(width: CGFloat(arrowWidth), height: CGFloat(arrowHeight))
+    if hasNativeText {
+      shape.shapeLayer.path = TooltipShape.bubblePath(
+        rect: bounds,
+        side: placement.side,
+        arrowSize: arrowSize,
+        cornerRadius: cornerRadius,
+        arrowCenter: placement.arrowCenter
+      ).cgPath
+      label?.frame = bounds.inset(by: paddingInsets())
+    } else {
+      shape.shapeLayer.path = TooltipShape.arrowPath(
+        rect: bounds,
+        side: placement.side,
+        arrowSize: arrowSize,
+        arrowCenter: placement.arrowCenter
+      ).cgPath
+      // The slot is a window-wide measuring box; shift it so the bubble it
+      // holds lands exactly on the container's origin.
+      let offset = bodyOffsetInSlot()
+      contentHost.frame = CGRect(
+        x: -offset.x,
+        y: -offset.y,
+        width: bounds.width + offset.x,
+        height: bounds.height + offset.y
+      )
+    }
+  }
+
+  private func animateIn(_ container: UIView) {
+    switch presetAnimation {
+    case PresetAnimation.none:
+      return
+    case .zoomIn:
+      container.alpha = 0
+      container.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+      UIView.animate(
+        withDuration: max(Double(showDuration), 0.01),
+        delay: 0,
+        usingSpringWithDamping: 0.78,
+        initialSpringVelocity: 0.4,
+        options: [.allowUserInteraction, .beginFromCurrentState]
+      ) {
+        container.alpha = 1
+        container.transform = .identity
+      }
+    case .fade, .fadeIn:
+      container.alpha = 0
+      UIView.animate(
+        withDuration: max(Double(showDuration), 0.01),
+        delay: 0,
+        options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
+      ) {
+        container.alpha = 1
       }
     }
   }
 
-  private func applyPopoverAttributes(_ popover: inout Popover) {
-    popover.attributes.sourceFrame = { [weak self] in
-      self?.resolvedSourceFrame() ?? .zero
+  /// Props arrive one at a time and can change while the popup is on screen —
+  /// a theme switch repaints the bubble, so the native chrome has to follow.
+  func didUpdateProps() {
+    guard isPresented, let window, let source = sourceFrame() else { return }
+    shapeView?.shapeLayer.fillColor = bubbleBackgroundColor.cgColor
+    let size: CGSize
+    if hasNativeText {
+      label?.font = textStyle.resolvedFont()
+      label?.textColor = textStyle.color
+      label?.text = text
+      size = textBubbleSize(availableWidth: window.bounds.width - Self.edgePadding * 2)
+    } else {
+      guard let body = bodyView(), body.bounds.width > 1, body.bounds.height > 1 else { return }
+      size = body.bounds.size
     }
-    // The opening tap lands on the trigger. Without excluding that
-    // frame, `.tapOutside` treats the same finger-up as a dismiss.
-    popover.attributes.dismissal.excludedFrames = { [weak self] in
-      guard let frame = self?.resolvedSourceFrame() else { return [] }
-      return [frame]
-    }
-    // Text bubbles include the arrow in their layout padding. Custom
-    // content does not — keep the extra inset so the RN body clears
-    // the trigger.
-    let gap = hasNativeText ? sideOffset : (sideOffset + arrowHeight)
-    popover.attributes.sourceFrameInset = side.toSideOffset(offset: gap)
-    // Keep the bubble off the display edge. `.zero` parked a right-side
-    // tooltip flush with the screen, which clipped the right-hand
-    // corners and made them look sharper than the left.
-    popover.attributes.screenEdgePadding = .init(top: 8, left: 8, bottom: 8, right: 8)
-    popover.attributes.rubberBandingMode = disableDrag ? .none : [.xAxis, .yAxis]
-    popover.attributes.presentation.animation = .easeIn(duration: showDuration)
-    // Enable tap-outside after the opening gesture ends. Presenting
-    // with `.tapOutside` already on makes the same press dismiss it.
-    popover.attributes.dismissal.mode = .none
-    let customTransition: AnyTransition
-    switch presetAnimation {
-      case .none:
-        customTransition = .identity
-      case .fade:
-        customTransition = .opacity
-      default:
-        customTransition = .modifier(
-          active: PopoverModifier(isActive: false, side: self.side, presetAnimation:self.presetAnimation),
-          identity: PopoverModifier(isActive: true, side: self.side, presetAnimation:self.presetAnimation)
-        )
-    }
-    popover.attributes.presentation.transition = customTransition
-    popover.attributes.position = .absolute(
-      originAnchor: side.toOriginAnchorSide(),
-      popoverAnchor: side.toPopoverAnchorSide()
-    )
-    popover.attributes.onDismiss = { [weak self] in
-      guard let self else { return }
-      self.isPresented = false
-      self.parkContent()
-      self.onDismiss()
+    applyPlacement(placement(for: size, source: source, in: window))
+  }
+
+  @objc private func handleBubbleTap() {
+    onTap()
+    if !disableTapToDismiss {
+      dismiss(notify: true)
     }
   }
 
-  private func makePopover() -> Popover {
-    var next = Popover { self.body
-      .modifier(PopoverModifier(isActive: true, side: self.side, presetAnimation: self.presetAnimation))
-    }
-    applyPopoverAttributes(&next)
-    return next
+  func handleOutsideTap() {
+    guard !disableDismissWhenTouchOutside else { return }
+    dismiss(notify: true)
   }
+
+  /// - Parameter notify: whether JS still has to be told the popup closed.
+  ///   Closing because `open` went false is already known upstream.
+  func dismiss(notify: Bool) {
+    openRequested = false
+    guard isPresented else {
+      stopDisplayLink()
+      return
+    }
+    isPresented = false
+    stopDisplayLink()
+
+    let overlay = self.overlay
+    let container = bubbleContainer
+    self.overlay = nil
+    bubbleContainer = nil
+    shapeView = nil
+    label = nil
+
+    // Bring the popup slot home once the overlay is gone, so React keeps
+    // measuring it and the next open is instant.
+    let finish = { [weak self] in
+      // Only if it is still here: a popup reopened during the fade-out has
+      // already moved the slot into its new container.
+      if self?.contentHost.superview === container {
+        self?.contentHost.removeFromSuperview()
+      }
+      overlay?.removeFromSuperview()
+    }
+    if presetAnimation == PresetAnimation.none {
+      finish()
+    } else {
+      UIView.animate(
+        withDuration: max(Double(dismissDuration), 0.01),
+        delay: 0,
+        options: [.curveEaseIn, .beginFromCurrentState]
+      ) {
+        container?.alpha = 0
+      } completion: { _ in
+        finish()
+      }
+    }
+
+    if notify {
+      onDismiss()
+    }
+  }
+
+  // MARK: - Lifecycle
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    // Do not build `body` / RepresentedUIView here. Evaluating the
-    // popover view reparents the RN content into a host and sets
-    // alpha = 1, which is how the Rich Wi‑Fi bubble appeared on the
-    // status bar while the tooltip was closed.
     if isPresented {
-      popover?.attributes.sourceFrame = { [weak self] in
-        self?.resolvedSourceFrame() ?? .zero
-      }
-    } else if opened, openWorkItem == nil {
-      // Retry only when nothing is already scheduled. Calling
-      // scheduleOpen on every layout would keep resetting the timer.
-      scheduleOpen()
+      updatePlacement()
+    } else if openRequested {
+      tryPresent()
     }
   }
 
-  func openTooltip() {
-    guard !isPresented else { return }
-    guard window != nil || closestViewController()?.view.window != nil else {
-      return
-    }
-    // Wait until the trigger has a real window frame. Presenting from
-    // `opened`'s didSet (defaultOpen / first prop pass) used a zero
-    // frame; Popovers then clamped the bubble onto the status bar.
-    guard resolvedSourceFrame() != nil else { return }
-    // Custom content: prefer JS onLayout, but a title-only first pass
-    // must not block present if the subtree already includes buttons.
-    if !hasNativeText {
-      contentView?.alpha = 1
-      contentView?.isUserInteractionEnabled = true
-      contentView?.clipsToBounds = false
-      contentView?.layoutIfNeeded()
-      if contentHeight <= 0 && resolvedContentSize() == .zero {
-        return
-      }
-    }
-    contentView?.clipsToBounds = false
-    contentView?.layoutIfNeeded()
-    var next = makePopover()
-    applyPopoverAttributes(&next)
-    popover = next
-
-    var presenter = closestViewController()
-    if presenter?.view.window == nil {
-      presenter = window?.rootViewController
-      while let current = presenter, let nextVC = current.presentedViewController {
-        presenter = nextVC
-      }
-    }
-    guard let presenter, presenter.view.window != nil else { return }
-
-    isPresented = true
-    presenter.present(next)
-    popover = next
-
-    if !disableDismissWhenTouchOutside {
-      DispatchQueue.main.async { [weak self] in
-        guard let self, self.isPresented else { return }
-        self.popover?.attributes.dismissal.mode = .tapOutside
-      }
-    }
-  }
-
-  public func dismiss() {
-    guard isPresented else { return }
-    popover?.dismiss()
-    // If present never attached a container, `dismiss()` is a no-op and
-    // `onDismiss` never runs — reset so the next open is not stuck.
-    if isPresented {
-      isPresented = false
-      parkContent()
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    if window == nil {
+      dismiss(notify: false)
     }
   }
 }

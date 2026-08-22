@@ -14,6 +14,10 @@ public class UniversalTooltipModule: Module {
     View(UniversalTooltipView.self) {
       Events("onTap")
       Events("onDismiss")
+
+      OnViewDidUpdateProps { (view: UniversalTooltipView) in
+        view.didUpdateProps()
+      }
       
       Prop("open") { (view, opened: Bool?) in
         view.opened = opened ?? false
@@ -65,12 +69,6 @@ public class UniversalTooltipModule: Module {
       }
       Prop("bubbleColor") { (view, bubbleColor: UIColor?) in
         view.bubbleBackgroundColor = bubbleColor ?? .clear
-      }
-      Prop("contentWidth") { (view, contentWidth: Double?) in
-        view.contentWidth = contentWidth ?? 0
-      }
-      Prop("contentHeight") { (view, contentHeight: Double?) in
-        view.contentHeight = contentHeight ?? 0
       }
     }
   }

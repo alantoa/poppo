@@ -84,7 +84,6 @@ PODS:
   - hermes-engine (250829098.0.16):
     - hermes-engine/Pre-built (= 250829098.0.16)
   - hermes-engine/Pre-built (250829098.0.16)
-  - Popovers (1.3.0)
   - RCTDeprecation (0.86.2)
   - RCTRequired (0.86.2)
   - RCTSwiftUI (0.86.2)
@@ -2193,7 +2192,6 @@ PODS:
     - Yoga
   - UniversalTooltip (1.1.0):
     - ExpoModulesCore
-    - Popovers (~> 1.3.0)
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -2293,10 +2291,6 @@ DEPENDENCIES:
   - RNWorklets (from `../node_modules/react-native-worklets`)
   - UniversalTooltip (from `../../ios`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
-
-SPEC REPOS:
-  trunk:
-    - Popovers
 
 EXTERNAL SOURCES:
   EXConstants:
@@ -2509,7 +2503,6 @@ SPEC CHECKSUMS:
   ExpoSystemUI: ff3142b323ae7b4d11dc0b1dc4acfa30d92be7dc
   FBLazyVector: 3c3be9a019176b5699455f7f66c5444b78a411c6
   hermes-engine: 2dc7209e5e852f80a3c1435eae3a8bcf36094e3a
-  Popovers: 8690b055b2c9ef433492b40e081b1a0be5859437
   RCTDeprecation: bccb6545c26db881ecddfd83a3f9ea82aba1605f
   RCTRequired: b2f74764d596fc0051f00fee94b49bf41a6f7f5a
   RCTSwiftUI: c6d6a31b849b9dfa64c33b55dc91ac15dd55774c
@@ -2586,7 +2579,7 @@ SPEC CHECKSUMS:
   RNReanimated: fcf6a8cdd698fb09a811a8d6c5bcfe36575d965d
   RNScreens: 7118cd7715c226856125b5bece3c4d9abec90356
   RNWorklets: 43af89f696342f91118a2f1f3a879056e2f47331
-  UniversalTooltip: fc1d0eebcf9af09ec41672248e00ff455b30c4f6
+  UniversalTooltip: 1cc399dc4279e5419a5eadf29bd870a36d1a3760
   Yoga: 9891cfb1c680f64de9c41b09e7453dea33454d2b
 
 PODFILE CHECKSUM: 1f76493ffffc2b2371e3bfe53eaebd39c7de3bea

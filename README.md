@@ -45,7 +45,7 @@ toast.add({ title: "Saved", description: "Your booking was updated" });
 
 🍎 On iOS:
 
-- This component is written in Swift and wraps [`Popovers`](https://github.com/aheze/Popovers).
+- This component is written in Swift. The popup is a plain UIKit overlay on the key window: the bubble is positioned, flipped and clamped against the safe area natively, and custom React content is hosted inside it with React Native's own touch pipeline attached, so it stays interactive.
 
 🤖️ On Android:
 
@@ -184,7 +184,7 @@ If you render tooltips on web, also install the web peer dependency:
 yarn add @base-ui/react
 ```
 
-Expo SDK 53+ default build settings already satisfy the native requirements ([Balloon](https://github.com/skydoves/Balloon) on Android, [Popovers](https://github.com/aheze/Popovers) on iOS 16.4+). No extra `expo-build-properties` configuration is needed.
+Expo SDK 53+ default build settings already satisfy the native requirements ([Balloon](https://github.com/skydoves/Balloon) on Android, UIKit on iOS 16.4+). No extra `expo-build-properties` configuration is needed.
 
 ## License
 

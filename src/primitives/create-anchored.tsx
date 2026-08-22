@@ -7,12 +7,12 @@ import React, {
   useState,
 } from "react";
 import {
-  Dimensions,
   Platform,
   Pressable,
   StyleSheet,
   View,
   processColor,
+  useWindowDimensions,
 } from "react-native";
 
 import type {
@@ -27,7 +27,7 @@ import type {
 } from "../types";
 import { findElement } from "../utils/find-element";
 import { pickChild } from "../utils/pick-child";
-import { POPUP_CONTENT_NATIVE_ID } from "../utils/slots";
+import { POPUP_BODY_NATIVE_ID, POPUP_CONTENT_NATIVE_ID } from "../utils/slots";
 
 const NativeView: React.ComponentType<any> =
   requireNativeViewManager("UniversalTooltip");
@@ -54,13 +54,16 @@ const textContentOf = (children: React.ReactNode) =>
 //    sense for a bubble (backgroundColor, borderRadius, padding*, width /
 //    maxWidth) and for its text (fontSize, color, fontWeight, fontFamily)
 //    are bridged over automatically.
-// 2. Custom children are rendered by React Native — give the content an
-//    explicit size (like any absolutely-positioned RN view) and every style
-//    works.
+// 2. Custom children are rendered by React Native inside the popup slot, so
+//    every style works — see `popupSlotStyle`.
 const firstChildStyle = (children: React.ReactNode) => {
   const items = React.Children.toArray(children).filter(Boolean);
   for (const child of items) {
-    if (React.isValidElement(child) && child.props && (child.props as any).style) {
+    if (
+      React.isValidElement(child) &&
+      child.props &&
+      (child.props as any).style
+    ) {
       return StyleSheet.flatten((child.props as any).style) as any;
     }
   }
@@ -71,8 +74,8 @@ const resolvePopupLayout = (children: React.ReactNode, style: any) => {
   const flat = StyleSheet.flatten(style) ?? ({} as any);
   const useNativeText = isTextContent(children);
   // Custom bubbles usually put chrome on the inner View, not Popup.
-  // Native still needs those values to draw the arrow (and on Android,
-  // the Balloon body) so the two layers share one radius and fill.
+  // Native still needs those values to draw the arrow so the two layers
+  // share one radius and fill.
   const child = useNativeText ? {} : firstChildStyle(children);
 
   const bubbleColor = flat.backgroundColor ?? child.backgroundColor;
@@ -113,7 +116,6 @@ const resolvePopupLayout = (children: React.ReactNode, style: any) => {
 type AnchoredContextValue = {
   open: boolean;
   setOpen: (open: boolean) => void;
-  setContentLayout: (size: { width: number; height: number }) => void;
 };
 
 export const createAnchoredSet = (
@@ -122,7 +124,6 @@ export const createAnchoredSet = (
   const AnchoredContext = createContext<AnchoredContextValue>({
     open: false,
     setOpen: () => {},
-    setContentLayout: () => {},
   });
 
   const Trigger = ({
@@ -144,31 +145,24 @@ export const createAnchoredSet = (
 
   const Positioner = ({ children }: PositionerProps) => <>{children}</>;
 
-  // Note: `position: "absolute"` without top/left/right/bottom keeps the
-  // popup wrapper out of the trigger's layout while letting it size to its
-  // own content — the native side reads this size to measure the bubble.
-  // Android clips overflow by default, so a short trigger would crop the
-  // popup (the Confirm "Remove" button sat below the clip and vanished).
-  const popupWrapperStyle = {
+  // The slot is the box native moves into the popup window. It is:
+  //
+  // * absolute, so the bubble never takes part in the trigger's row — an
+  //   in-flow child would push the trigger sideways and out of its card;
+  // * as wide as the window, because Yoga measures an absolute child inside
+  //   its containing block. Left to hug a 68pt trigger, a `maxWidth: 260`
+  //   bubble wrapped into a narrow column;
+  // * `box-none`, so the empty area left over by that measuring width stays
+  //   transparent to touches and outside taps still dismiss the popup.
+  //
+  // The bubble itself is the inner body view: it hugs its content, and its
+  // frame is what native positions and sizes the popup window from.
+  const popupSlotStyle = {
     position: "absolute",
+    top: 0,
+    left: 0,
     overflow: "visible",
-    alignSelf: "flex-start",
-    flexShrink: 0,
   } as const;
-
-  const reportContentLayout = (
-    setContentLayout: AnchoredContextValue["setContentLayout"],
-    width: number,
-    height: number,
-  ) => {
-    if (width <= 0 || height <= 0) return;
-    // An absolute popup is in an unbounded Yoga context. A `flex: 1`
-    // descendant can inherit the window height (we measured 64×774 and
-    // Popovers clamped that strip onto the status bar). Ignore those.
-    const { width: sw, height: sh } = Dimensions.get("window");
-    if (width > sw || height > sh * 0.5) return;
-    setContentLayout({ width, height });
-  };
 
   const Popup = ({
     children,
@@ -182,13 +176,9 @@ export const createAnchoredSet = (
     className: _className,
     ...rest
   }: PopupProps) => {
-    const { open, setContentLayout } = useContext(AnchoredContext);
+    const { open } = useContext(AnchoredContext);
+    const { width: windowWidth } = useWindowDimensions();
     const [childrenWithoutArrow] = pickChild(children, Arrow);
-    const childStyle = firstChildStyle(childrenWithoutArrow);
-    // Yoga sizes an absolute child to the trigger if we don't give a
-    // width. Use the bubble's own width / maxWidth so Rich content is
-    // not measured as a 64pt-wide column.
-    const measureWidth = childStyle.width ?? childStyle.maxWidth;
     if (isTextContent(childrenWithoutArrow)) {
       // Text bubbles are drawn natively from props. Do not mount a
       // placeholder — a dummy child would compete with the trigger for
@@ -199,34 +189,16 @@ export const createAnchoredSet = (
       <View
         nativeID={POPUP_CONTENT_NATIVE_ID}
         collapsable={false}
-        pointerEvents={open ? "auto" : "none"}
-        style={[
-          style,
-          popupWrapperStyle,
-          open && measureWidth != null ? { width: measureWidth } : null,
-          // Closed: collapse so Android Yoga does not grow the trigger
-          // row to the bubble width and clip the Show chip.
-          !open ? { width: 0, height: 0, overflow: "hidden" } : null,
-          // Fabric owns opacity. Native `alpha = 0` is overwritten on the
-          // next style pass, which painted the Rich Wi‑Fi bubble over Show.
-          { opacity: open ? 1 : 0, zIndex: open ? 0 : -1 },
-        ]}
-        onLayout={(event) => {
-          if (!open) return;
-          const { width, height } = event.nativeEvent.layout;
-          reportContentLayout(setContentLayout, width, height);
-        }}
-        {...(Platform.OS === "android" && onTap ? { onTouchEnd: onTap } : {})}
-        {...rest}
+        pointerEvents="box-none"
+        style={[popupSlotStyle, { width: windowWidth }]}
       >
         <View
+          nativeID={POPUP_BODY_NATIVE_ID}
           collapsable={false}
-          style={{ alignSelf: "flex-start", flexShrink: 0 }}
-          onLayout={(event) => {
-            if (!open) return;
-            const { width, height } = event.nativeEvent.layout;
-            reportContentLayout(setContentLayout, width, height);
-          }}
+          pointerEvents={open ? "auto" : "none"}
+          style={[style, { alignSelf: "flex-start", flexShrink: 0 }]}
+          {...(Platform.OS === "android" && onTap ? { onTouchEnd: onTap } : {})}
+          {...rest}
         >
           {childrenWithoutArrow}
         </View>
@@ -250,10 +222,6 @@ export const createAnchoredSet = (
     ...rest
   }: RootProps) => {
     const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-    const [contentLayout, setContentLayout] = useState({
-      width: 0,
-      height: 0,
-    });
     const open = openProp ?? uncontrolledOpen;
     const setOpen = useCallback(
       (next: boolean) => {
@@ -262,37 +230,12 @@ export const createAnchoredSet = (
         }
         onOpenChange?.(next);
         if (!next) {
-          // Drop the parked measurement so the next open waits for a
-          // layout that includes later children (Pressables).
-          setContentLayout({ width: 0, height: 0 });
           onDismiss?.();
         }
       },
       [openProp, onOpenChange, onDismiss],
     );
-    const applyContentLayout = useCallback(
-      (size: { width: number; height: number }) => {
-        if (size.width <= 0 && size.height <= 0) {
-          setContentLayout({ width: 0, height: 0 });
-          return;
-        }
-        // Keep the larger plausible size. A later inner onLayout can be
-        // just the title block; replacing would clip the Remove button.
-        setContentLayout((prev) => ({
-          width: Math.max(prev.width, size.width),
-          height: Math.max(prev.height, size.height),
-        }));
-      },
-      [],
-    );
-    const contextValue = useMemo(
-      () => ({
-        open,
-        setOpen,
-        setContentLayout: applyContentLayout,
-      }),
-      [open, setOpen, applyContentLayout],
-    );
+    const contextValue = useMemo(() => ({ open, setOpen }), [open, setOpen]);
 
     const [withoutTrigger, triggerChildren] = pickChild(children, Trigger);
 
@@ -335,8 +278,6 @@ export const createAnchoredSet = (
           disableDismissWhenTouchOutside={disableDismissWhenTouchOutside}
           {...nativeTextProps}
           text={useNativeText ? nativeTextProps.text : undefined}
-          contentWidth={contentLayout.width}
-          contentHeight={contentLayout.height}
           onDismiss={() => setOpen(false)}
           style={[{ alignSelf: "flex-start", overflow: "visible" }, rootStyle]}
           {...rootRest}

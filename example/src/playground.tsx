@@ -264,14 +264,14 @@ const DemoToast = ({ toast }: { toast: ToastObject }) => {
       {data.actionLabel ? (
         <Toast.Action
           testID="demo-toast-action-btn"
-          style={({ pressed }) => ({
+          style={{
             minHeight: 36,
             paddingHorizontal: 14,
             borderRadius: theme.radius.button,
-            backgroundColor: pressed ? theme.body : theme.ink,
+            backgroundColor: theme.ink,
             alignItems: "center",
             justifyContent: "center",
-          })}
+          }}
         >
           <Text
             style={{

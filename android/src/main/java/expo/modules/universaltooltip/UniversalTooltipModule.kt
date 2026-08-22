@@ -1,5 +1,6 @@
 package expo.modules.universaltooltip
 
+import android.view.View
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.universaltooltip.records.ContainerStyle
@@ -20,10 +21,32 @@ class UniversalTooltipModule : Module() {
         // Enables the module to be used as a native view. Definition components that are accepted as part of
         // the view definition: Prop, Events.
         View(UniversalTooltipView::class) {
+            // The popup slot is hosted outside this view (see
+            // UniversalTooltipView), so React's child bookkeeping has to be
+            // routed through the view instead of the ViewGroup itself.
+            GroupView<UniversalTooltipView> {
+                AddChildView { parent: UniversalTooltipView, child: View, index: Int ->
+                    parent.addReactChild(child, index)
+                }
+                GetChildCount { view: UniversalTooltipView -> view.reactChildCount() }
+                GetChildViewAt { view: UniversalTooltipView, index: Int ->
+                    view.reactChildAt(index)
+                }
+                RemoveChildViewAt { view: UniversalTooltipView, index: Int ->
+                    view.removeReactChildAt(index)
+                }
+                RemoveChildView { parent: UniversalTooltipView, child: View ->
+                    parent.removeReactChild(child)
+                }
+            }
+
             Events(
                 "onTap",
                 "onDismiss",
             )
+            OnViewDidUpdateProps { view: UniversalTooltipView ->
+                view.onPropsDidUpdate()
+            }
             Prop("open") { view: UniversalTooltipView, open: Boolean ->
                 view.opened = open
             }
