@@ -569,9 +569,12 @@ class UniversalTooltipView: ExpoView {
     dismiss(notify: true)
   }
 
-  /// - Parameter notify: whether JS still has to be told the popup closed.
-  ///   Closing because `open` went false is already known upstream.
-  func dismiss(notify: Bool) {
+  /// - Parameters:
+  ///   - notify: whether JS still has to be told the popup closed. Closing
+  ///     because `open` went false is already known upstream.
+  ///   - animated: pass `false` to tear the overlay down on the spot, for
+  ///     paths where there is no longer a component to animate for.
+  func dismiss(notify: Bool, animated: Bool = true) {
     openRequested = false
     guard isPresented else {
       stopDisplayLink()
@@ -597,7 +600,7 @@ class UniversalTooltipView: ExpoView {
       }
       overlay?.removeFromSuperview()
     }
-    if presetAnimation == PresetAnimation.none {
+    if !animated || presetAnimation == PresetAnimation.none {
       finish()
     } else {
       UIView.animate(
@@ -632,5 +635,67 @@ class UniversalTooltipView: ExpoView {
     if window == nil {
       dismiss(notify: false)
     }
+  }
+
+  /// React calls this on every unmounted view that does not go into the
+  /// recycle pool — which is every Expo view, since `ExpoFabricView` opts out
+  /// of recycling. It is the one deterministic teardown point: without it the
+  /// overlay would only come down when the last reference to this view is
+  /// dropped, or as a side effect of the view leaving its window.
+  ///
+  /// Not marked `override`: the default implementation lives in React's
+  /// `UIView (RCTComponentViewProtocol)` category, which is not visible to
+  /// Swift, so this overrides it through the Objective-C runtime instead.
+  /// It is a no-op there, so there is nothing to call up to.
+  @objc
+  func invalidate() {
+    tearDown()
+  }
+
+  /// Unreachable today (see `invalidate`), but expo-modules-core carries a
+  /// standing TODO to make recycling opt-in per view. If that ever lands, a
+  /// pooled view must not carry props into its next life: Expo re-applies the
+  /// whole prop map on reuse, but only the props the new element actually
+  /// declares, so a leftover `text` would render a custom-content popup as a
+  /// native text bubble.
+  override func prepareForRecycle() {
+    tearDown()
+    resetProps()
+    super.prepareForRecycle()
+  }
+
+  private func tearDown() {
+    dismiss(notify: false, animated: false)
+    if let slotView {
+      detachTouchHandler(from: slotView)
+    }
+    slotView = nil
+    reactChildren.removeAll()
+    contentHost.removeFromSuperview()
+    for child in contentHost.subviews {
+      child.removeFromSuperview()
+    }
+    openRequested = false
+    lastSourceFrame = .null
+  }
+
+  private func resetProps() {
+    opened = false
+    text = nil
+    maxWidth = nil
+    containerStyle = nil
+    textStyle = TextStyle(fontSize: 14, color: .black, fontWeight: "normal")
+    bubbleBackgroundColor = .clear
+    side = .any
+    presetAnimation = .fadeIn
+    showDuration = 0.3
+    dismissDuration = 0.3
+    cornerRadius = 5
+    arrowWidth = 20
+    arrowHeight = 10
+    sideOffset = 1
+    disableTapToDismiss = false
+    disableDrag = false
+    disableDismissWhenTouchOutside = false
   }
 }
