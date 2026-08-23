@@ -61,8 +61,9 @@ android/keystores/debug.keystore
 .expo/*
 dev-types.txt 
 .env 
-# The example app's generated native projects — not the library's own
-# `ios/` and `android/` sources, which are the package itself.
-example/ios
-example/android
+# Generated output only. The example's native projects are committed, and
+# their own .gitignore files cover the rest — a blanket `example/ios` here
+# silently hid real sources (this package's Kotlin, the example's UI tests).
+example/ios/Pods
+example/android/.gradle
 android/build
