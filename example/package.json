@@ -6,7 +6,8 @@
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test:ios": "xcodebuild test -workspace ios/universaltooltipexample.xcworkspace -scheme universaltooltipexample -destination 'platform=iOS Simulator,name=iPhone 16 Pro'"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.8",

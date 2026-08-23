@@ -8,6 +8,9 @@ import UIKit
 /// working exactly as it did before the popup opened.
 final class TooltipOverlayView: UIView {
   weak var owner: UniversalTooltipView?
+  /// The bubble, so a touch that merely passed through it can be told apart
+  /// from one that really landed outside.
+  weak var bubble: UIView?
   var dismissesOnOutsideTap = true
 
   override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -20,6 +23,14 @@ final class TooltipOverlayView: UIView {
 
   override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
     super.touchesEnded(touches, with: event)
+    guard dismissesOnOutsideTap, let touch = touches.first else { return }
+    // React's views observe touches through a gesture recognizer; they never
+    // consume them as a responder. So a press on the popup's own content
+    // walks up the responder chain and arrives here too — treating that as an
+    // outside tap closed the popup whenever its content was pressed.
+    if let bubble, bubble.frame.contains(touch.location(in: self)) {
+      return
+    }
     owner?.handleOutsideTap()
   }
 }
@@ -502,6 +513,7 @@ class UniversalTooltipView: ExpoView {
       container.addSubview(contentHost)
     }
 
+    overlay.bubble = container
     window.addSubview(overlay)
     self.overlay = overlay
     bubbleContainer = container
