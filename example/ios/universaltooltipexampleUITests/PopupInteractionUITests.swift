@@ -60,12 +60,16 @@ final class PopupInteractionUITests: XCTestCase {
   /// puts it away.
   func testPressingTooltipContentDismissesIt() {
     trigger("demo-tooltip-rich").tap()
-    let bubble = app.staticTexts["Network available"]
-    XCTAssertTrue(bubble.waitForExistence(timeout: uiTimeout))
+    // React exposes the text as more than one element, so address the query
+    // rather than an element that has to resolve to exactly one match.
+    let bubble = app.staticTexts.matching(identifier: "Network available")
+    let shown = NSPredicate(format: "count > 0")
+    expectation(for: shown, evaluatedWith: bubble)
+    waitForExpectations(timeout: uiTimeout)
 
-    bubble.firstMatch.tap()
+    bubble.element(boundBy: 0).tap()
 
-    let gone = NSPredicate(format: "exists == false")
+    let gone = NSPredicate(format: "count == 0")
     expectation(for: gone, evaluatedWith: bubble)
     waitForExpectations(timeout: uiTimeout)
   }
@@ -81,6 +85,9 @@ final class PopupInteractionUITests: XCTestCase {
       .firstMatch
       .tap()
 
+    // A dismissal would still be playing its exit animation right now, so give
+    // it longer than that before believing the popup survived.
+    Thread.sleep(forTimeInterval: 1)
     XCTAssertTrue(
       title.exists,
       "Pressing the popover's own content closed it."

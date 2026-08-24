@@ -7,9 +7,12 @@ export function isAndroidWeb(): boolean {
 }
 
 export function isIOSWeb(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (/iPhone|iPod|iPad/.test(navigator.userAgent)) return true;
+  // iPadOS Safari reports a Macintosh user agent by default. Without this an
+  // iPad gets the hover-driven tooltip, which it has no way to open.
   return (
-    typeof navigator !== "undefined" &&
-    /iPhone|iPod|iPad/.test(navigator.userAgent)
+    /Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints ?? 0) > 1
   );
 }
 

@@ -101,7 +101,7 @@ toast.add({ title: "Saved", description: "Your booking was updated" });
 
 ## Anatomy
 
-```
+```text
 <Root>                     open state
   <Trigger />              what you press or hover
   <Portal>                 renders outside the parent
@@ -177,7 +177,7 @@ Accepts every `View` prop.
 | --- | --- | --- |
 | `width` | `number` | |
 | `height` | `number` | |
-| `backgroundColor` | `string` | Defaults to the popup's `style.backgroundColor`. |
+| `backgroundColor` | `string` | Defaults to the popup's `style.backgroundColor`. A natively drawn text bubble is one shape, so there it is the popup's colour that wins. |
 | `className` | `string` | **web** |
 
 ### Toast
@@ -249,7 +249,7 @@ surface behave differently:
 | | `Tooltip` | `Popover` |
 | --- | --- | --- |
 | Content takes touches | no | yes |
-| Pressing the content | dismisses | is the content's to handle |
+| Pressing the content | dismisses, unless `disableTapToDismiss` | is the content's to handle |
 | Assistive tech | announced as a hint | treated as a modal surface |
 
 So put a button inside a `Popover`, never a `Tooltip`.
@@ -289,8 +289,9 @@ Still missing, and worth knowing before reaching for these in production:
 `example/` is a playground app that doubles as the test bed:
 
 ```sh
-cd example && yarn ios      # or yarn android
-cd example && yarn test:ios # XCUITest suite
+cd example
+yarn ios       # or yarn android
+yarn test:ios  # XCUITest suite
 ```
 
 [AGENTS.md](./AGENTS.md) documents the platform behaviour the native

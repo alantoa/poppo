@@ -16,9 +16,10 @@ npx tsc --noEmit                # library
 npx tsc --noEmit -p example/tsconfig.json
 yarn prepare                    # build to build/ (does NOT clean; see below)
 
-cd example && yarn start        # Metro
-cd example && yarn ios          # or yarn android
-cd example && yarn test:ios     # XCUITest suite
+cd example
+yarn start                      # Metro
+yarn ios                        # or yarn android
+yarn test:ios                   # XCUITest suite; starts Metro itself if needed
 ```
 
 Two build steps have non-obvious prerequisites, both of which fail with errors
@@ -105,11 +106,15 @@ Screenshots are not enough for anything touch-related; drive it.
   window from outside needs Accessibility permission that a CLI agent will not
   have. The suite covers the paths only a real touch reaches, and it has caught
   a real bug that every screenshot pass missed.
-  Running it installs `universaltooltipexampleUITests-Runner` on the simulator,
-  with an icon next to the real app. Launching that by hand always dies with
-  "Library not loaded: @rpath/XCTest.framework/XCTest" — that is expected, not a
-  crash in the example. Remove it with
-  `xcrun simctl uninstall booted expo.modules.universaltooltip.example.uitests.xctrunner`.
+  Leaving the previously installed runner on the simulator makes the run
+  execute the **previous** build of the tests — a silent way to "verify" code
+  that is no longer there, and it cost real time before it was spotted. The
+  script uninstalls the runner before and after every run for that reason; if
+  you invoke `xcodebuild test` by hand, do the same, and sanity-check with
+  `strings <...>.xctest/<binary> | grep testYourNewName` when a result looks
+  impossible. The runner also dies instantly if launched from the home screen
+  ("Library not loaded: @rpath/XCTest.framework/XCTest") — expected, not a
+  crash in the example.
 - **Android**: drive it with `adb shell input tap`, and screenshot with
   `adb exec-out screencap -p`. Reset the scroll position first (the list drifts
   between runs) and confirm the app is actually foreground — a stray tap on the

@@ -133,9 +133,11 @@ export const createToastManager = (defaults?: {
     const id = options.id ?? `toast-${++idCounter}`;
 
     // Same id — update in place and restart the timer instead of stacking.
-    const visibleExisting = visible.find(
-      (toast) => toast.id === id && toast.state !== "closing",
-    );
+    // Closing entries count: one that is still playing its exit animation is
+    // brought back rather than duplicated. Appending instead would leave two
+    // entries sharing an id, and `finalize` filters by id, so the old one
+    // finishing its animation would take the new one with it.
+    const visibleExisting = visible.find((toast) => toast.id === id);
     if (visibleExisting) {
       visible = visible.map((toast) =>
         toast.id === id
@@ -415,30 +417,26 @@ export const Root = ({
     }),
   ).current;
 
-  // Enter animation on mount.
-  useEffect(() => {
-    if (presetAnimation === "none") return;
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: animationDuration,
-      useNativeDriver: true,
-    }).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Exit animation when the manager marks this toast as closing.
+  // One effect for both directions: entering on mount, leaving when the
+  // manager marks the toast closing — and entering again if the same id is
+  // re-added while that exit animation is still running.
   const closing = toast.state === "closing";
   useEffect(() => {
-    if (!closing) return;
+    if (!closing) {
+      pan.setValue({ x: 0, y: 0 });
+    }
     if (presetAnimation === "none") {
-      context?.manager.finalize(toast.id);
+      if (closing) context?.manager.finalize(toast.id);
       return;
     }
     Animated.timing(progress, {
-      toValue: 0,
+      toValue: closing ? 0 : 1,
       duration: animationDuration,
       useNativeDriver: true,
-    }).start(() => context?.manager.finalize(toast.id));
+    }).start(({ finished }) => {
+      // An interrupted exit means the toast came back; leave it alone.
+      if (closing && finished) context?.manager.finalize(toast.id);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closing]);
 

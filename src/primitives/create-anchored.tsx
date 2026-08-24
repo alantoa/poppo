@@ -264,7 +264,9 @@ export const createAnchoredSet = (
           setUncontrolledOpen(next);
         }
         onOpenChange?.(next);
-        if (!next) {
+        // Uncontrolled usage only, matching the web implementation and what
+        // `RootProps` documents. A controlled caller already knows.
+        if (!next && openProp === undefined) {
           onDismiss?.();
         }
       },
@@ -325,7 +327,16 @@ export const createAnchoredSet = (
         popupProps,
         nativeTextProps,
         text: useNativeText ? nativeTextProps.text : undefined,
-        bubbleColor: processColor(arrowColor ?? bubbleColor),
+        // Native takes a single colour, and it means different things on the
+        // two paths. For React content it fills only the arrow, so an
+        // `<Arrow backgroundColor>` wins. For a text bubble it fills the whole
+        // shape — letting the arrow's colour win there would repaint the
+        // bubble, which is the opposite of what `ArrowProps` promises.
+        bubbleColor: processColor(
+          useNativeText
+            ? (bubbleColor ?? arrowColor)
+            : (arrowColor ?? bubbleColor),
+        ),
         bubbleRadius,
         arrowWidth,
         arrowHeight,
