@@ -305,14 +305,7 @@ const ToastViewport = ({ position }: { position: ToastViewportPosition }) => {
   const { toasts } = useToastManager();
   const insets = useSafeAreaInsets();
   return (
-    <Toast.Viewport
-      position={position}
-      style={
-        position.startsWith("bottom")
-          ? { paddingBottom: Math.max(insets.bottom, 16) }
-          : { paddingTop: Math.max(insets.top, 16) + 8 }
-      }
-    >
+    <Toast.Viewport position={position} insets={insets}>
       {toasts.map((toast) => (
         <DemoToast key={toast.id} toast={toast} />
       ))}

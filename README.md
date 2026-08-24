@@ -199,10 +199,44 @@ Render them yourself:
 
 | Part | Notes |
 | --- | --- |
-| `Toast.Viewport` | Fixed container. `position` is `"top"` or `"bottom"`, optionally suffixed `-start` / `-end`. |
+| `Toast.Viewport` | Where the toasts stack. See [Placing the viewport](#placing-the-viewport). |
 | `Toast.Root` | One toast. `presetAnimation` (`"slide" \| "fade" \| "zoom" \| "none"`), `animationDuration`, `swipeToDismiss`. |
 | `Toast.Title` / `Toast.Description` | Fall back to the toast's own `title` / `description`. |
 | `Toast.Action` / `Toast.Close` | `Pressable`s that close the toast. |
+
+### Placing the viewport
+
+`position` takes `"top"` or `"bottom"`, optionally suffixed `-start` or
+`-end` for the horizontal edge — six values in all, defaulting to `"bottom"`.
+
+Two things are yours to decide, because a component this low-level should not
+decide them for you:
+
+**Where it is anchored.** The viewport is absolutely positioned, which in React
+Native means *relative to its parent*, not to the screen. Mounted at the root of
+your app it spans the window; mounted inside a screen that sits above a tab bar
+it spans that screen. Put it where you want the toasts to be bounded.
+
+**What it has to stay clear of.** Nothing here knows about safe areas, a home
+indicator or a tab bar, and taking a dependency on that would not be this
+library's call. Pass what you already have:
+
+```tsx
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+<Toast.Viewport position="bottom" insets={useSafeAreaInsets()} />
+```
+
+`insets` is added to the viewport's own padding, per edge. It has the same
+shape as `useSafeAreaInsets()`, so it takes that value directly — and anything
+else you need to clear:
+
+```tsx
+<Toast.Viewport insets={{ bottom: tabBarHeight + safeAreaBottom }} />
+```
+
+Without it, a bottom toast sits under the home indicator on a modern iPhone.
+`style` still overrides everything if you want to lay it out yourself.
 
 ## Styling
 

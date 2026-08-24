@@ -271,6 +271,13 @@ export const useToastManager = () => {
   );
 };
 
+export type ToastViewportEdgeInsets = {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+};
+
 export type ToastViewportProps = ViewProps & {
   children?: React.ReactNode;
   /**
@@ -278,16 +285,50 @@ export type ToastViewportProps = ViewProps & {
    * @default "bottom"
    */
   position?: ToastViewportPosition;
+  /**
+   * Extra room to leave at each edge, added to the viewport's own padding.
+   *
+   * Nothing here knows about safe areas or a tab bar — that is the app's to
+   * know, and taking a dependency on it would not be this library's call. Pass
+   * what you already have:
+   *
+   * ```tsx
+   * <Toast.Viewport insets={useSafeAreaInsets()} />
+   * <Toast.Viewport insets={{ bottom: useBottomTabBarHeight() }} />
+   * ```
+   */
+  insets?: ToastViewportEdgeInsets;
   style?: StyleProp<ViewStyle>;
 };
+
+/** Space between a toast and the edge it sits against. */
+const VIEWPORT_PADDING = 16;
 
 export const Viewport = ({
   children,
   position = "bottom",
+  insets,
   style,
   ...rest
 }: ToastViewportProps) => {
   const context = useMemo(() => ({ position }), [position]);
+  // Only the edges actually asked for are written, so a caller overriding
+  // `padding` wholesale through `style` still works when there are no insets.
+  const insetStyle = useMemo(
+    () => ({
+      ...(insets?.top ? { paddingTop: VIEWPORT_PADDING + insets.top } : null),
+      ...(insets?.bottom
+        ? { paddingBottom: VIEWPORT_PADDING + insets.bottom }
+        : null),
+      ...(insets?.left
+        ? { paddingLeft: VIEWPORT_PADDING + insets.left }
+        : null),
+      ...(insets?.right
+        ? { paddingRight: VIEWPORT_PADDING + insets.right }
+        : null),
+    }),
+    [insets?.top, insets?.bottom, insets?.left, insets?.right],
+  );
   const vertical = position.startsWith("top") ? { top: 0 } : { bottom: 0 };
   const alignItems = position.endsWith("-start")
     ? ("flex-start" as const)
@@ -306,9 +347,10 @@ export const Viewport = ({
             ...vertical,
             alignItems,
             gap: 8,
-            padding: 16,
+            padding: VIEWPORT_PADDING,
             zIndex: 1000,
           },
+          insetStyle,
           style,
         ]}
         {...rest}
