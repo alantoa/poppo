@@ -114,8 +114,9 @@ export type PopupProps = ViewProps & {
    */
   disableTapToDismiss?: boolean;
   /**
-   * iOS only - disable the rubber-band drag on the bubble.
-   * @default true
+   * No longer does anything. The rubber-band drag came from the SwiftUI
+   * popover library iOS used to be built on; the popup is a UIKit overlay now.
+   * @deprecated
    */
   disableDrag?: boolean;
   onTap?: () => void;

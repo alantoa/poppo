@@ -49,120 +49,131 @@ toast.add({ title: "Saved", description: "Your booking was updated" });
 
 🤖️ On Android:
 
-- This component is written in Kotlin and wraps the excellent library - [`Balloon`](https://github.com/skydoves/Balloon).
+- This component is written in Kotlin. [`Balloon`](https://github.com/skydoves/Balloon) provides the popup window and its placement; the bubble, its corners and the arrow are drawn by the module so that an `<Arrow>`'s width *and* height are honoured and text popups and React ones render identically.
 
 🌐 On Web:
 
-- This component wraps [Base UI](https://base-ui.com)'s [`Popover`](https://base-ui.com/react/components/popover) for mobile use (pass `usePopover` to `Root`).
+- `Tooltip` wraps [Base UI](https://base-ui.com)'s [`Tooltip`](https://base-ui.com/react/components/tooltip), and `Popover` wraps its [`Popover`](https://base-ui.com/react/components/popover).
 
-- This component wraps [Base UI](https://base-ui.com)'s [`Tooltip`](https://base-ui.com/react/components/tooltip) for desktop use.
-
-> Please note that hover-based tooltips only work on devices with a pointer — on touch devices, pass `usePopover` to `Root` to switch to the tap-triggered popover behavior.
+> Hover-based tooltips only work on devices with a pointer. On touch devices reach for `Popover` instead — the two share the same part structure, so it is a one-word change.
 
 ## Usage
 
+`Tooltip` and `Popover` expose the same parts, so the only difference is which
+one you import.
+
 ```tsx
-import { useState } from "react";
-import * as Tooltip from "universal-tooltip";
-import { Text, View, Pressable, Platform } from "react-native";
+import { Tooltip } from "universal-tooltip";
+import { Text, View } from "react-native";
 
-// because each platform has different behaviors, but you can replace the components yourself, of course.
-const TriggerView = Platform.OS === "web" ? View : Pressable;
-
-const [open, setOpen] = useState(false);
-
-<Tooltip.Root
-  // For web, I would like to be triggered automatically with the mouse.
-  {...Platform.select({
-    web: {},
-    default: {
-      open,
-      onDismiss: () => {
-        console.log("onDismiss");
-        setOpen(false);
-      },
-    },
-  })}
->
+<Tooltip.Root>
   <Tooltip.Trigger>
-    <TriggerView
-      {...Platform.select({
-        web: {},
-        default: {
-          open,
-          onPress: () => {
-            setOpen(true);
-          },
-        },
-      })}
-    >
-      <Text>Hello!👋</Text>
-    </TriggerView>
+    <Text>Hello!👋</Text>
   </Tooltip.Trigger>
-  <Tooltip.Content
-    sideOffset={3}
-    containerStyle={{
-      paddingLeft: 16,
-      paddingRight: 16,
-      paddingTop: 8,
-      paddingBottom: 8,
-    }}
-    onTap={() => {
-      setOpen(false);
-      console.log("onTap");
-    }}
-    dismissDuration={500}
-    disableTapToDismiss
-    side="right"
-    presetAnimation="fadeIn"
-    backgroundColor="black"
-    borderRadius={12}
-  >
-    <Tooltip.Text text="Some copy..." style={{ color: "#000", fontSize: 16 }} />
-  </Tooltip.Content>
+  <Tooltip.Portal>
+    <Tooltip.Positioner side="right" sideOffset={8}>
+      <Tooltip.Popup
+        presetAnimation="fadeIn"
+        style={{
+          backgroundColor: "#363A3E",
+          borderRadius: 12,
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          maxWidth: 260,
+          color: "#fff",
+          fontSize: 14,
+        }}
+      >
+        Some copy...
+        <Tooltip.Arrow width={14} height={8} />
+      </Tooltip.Popup>
+    </Tooltip.Positioner>
+  </Tooltip.Portal>
 </Tooltip.Root>;
 ```
 
+Uncontrolled by default. Pass `open` to drive it yourself, and pair it with
+`onOpenChange` so the popup can still close itself:
+
+```tsx
+const [open, setOpen] = useState(false);
+
+<Popover.Root open={open} onOpenChange={setOpen}>
+  {/* ... */}
+</Popover.Root>;
+```
+
+The parts are read from the elements you write inside `Root`, so they cannot be
+wrapped in a component of your own — React has not rendered `<MyPositioner />`
+yet, so there is nothing to read. Fragments and conditionals are fine, and in
+development you get a warning if no `Popup` can be found.
+
 ## API
 
-This component's API is close to [Base UI's Tooltip](https://base-ui.com/react/components/tooltip) component, but there are some differences on native.
+The part structure follows [Base UI's Tooltip](https://base-ui.com/react/components/tooltip):
+`Root` › `Trigger` › `Portal` › `Positioner` › `Popup` › `Arrow`. `side` and
+`sideOffset` go on `Positioner`; everything about the bubble goes on `Popup`.
 
 ### Styling
 
-Style the tooltip exactly like React Native's `<View>` and `<Text>`:
+Style the popup exactly like a React Native `<View>` — and, when its children
+are plain text, like a `<Text>` as well:
 
 ```tsx
-<Tooltip.Content
-  side="top"
+<Tooltip.Popup
   style={{
     backgroundColor: "rgba(54,58,62,0.85)",
     borderRadius: 12,
     paddingHorizontal: 20,
     paddingVertical: 12,
     maxWidth: 240,
+    fontSize: 14,
+    lineHeight: 21,
+    color: "#fff",
   }}
 >
-  <Tooltip.Text
-    text="Drag to reschedule"
-    style={{ fontSize: 14, lineHeight: 21, color: "#fff" }}
-  />
-  <Tooltip.Arrow width={19} height={12} />
-</Tooltip.Content>
+  Drag to reschedule
+  <Tooltip.Arrow width={14} height={8} />
+</Tooltip.Popup>
 ```
 
-- The arrow color is derived from the content's `style.backgroundColor` automatically.
-- On web every `ViewStyle`/`TextStyle` property works as-is.
-- On iOS/Android, text tooltips are rendered by the native bubble, which reads
-  `backgroundColor`, `borderRadius`, `padding*`, `width`/`maxWidth` from the
-  content `style` and `fontSize`, `color`, `fontWeight`, `fontFamily` from the
-  text `style`. Custom views (any non-`Tooltip.Text` children) are rendered by
-  React Native itself — give them an explicit size and every style works.
-- The legacy `backgroundColor` / `borderRadius` / `maxWidth` / `containerStyle`
-  props keep working but are deprecated in favor of `style`.
+There are two rendering paths, chosen by what you put inside `Popup`:
+
+- **String children** are drawn by the native bubble. A React-rendered bubble
+  would be laid out inside the trigger's containing block, so a narrow trigger
+  would squeeze the text; the native bubble measures itself against the screen
+  instead. It reads `backgroundColor`, `borderRadius`, `padding*` and
+  `width`/`maxWidth` from `style`, plus `fontSize`, `color`, `fontWeight` and
+  `fontFamily`.
+- **Any other children** are rendered by React Native itself, inside the popup
+  window, so every style and component works. Give the outermost view its own
+  background and radius — that view *is* the bubble.
+
+The arrow's colour defaults to the popup's `style.backgroundColor`; pass
+`backgroundColor` on `Arrow` to override it. On web every `ViewStyle` /
+`TextStyle` property works as-is.
 
 ### Interactive content
 
-Custom views inside the tooltip are fully interactive on all platforms — `onPress`, gestures, and text inputs work inside the bubble. On native this is powered by the same mechanism React Native's `Modal` uses (`RCTSurfaceTouchHandler` on iOS, a `RootView` + `JSTouchDispatcher` host on Android), since the tooltip is rendered in a native window outside the React root view.
+Custom views inside the popup are fully interactive on every platform —
+`onPress`, gestures and text inputs all work. On native this uses the same
+mechanism React Native's `Modal` does (`RCTSurfaceTouchHandler` on iOS, a
+`RootView` + `JSTouchDispatcher` host on Android), because the popup is
+rendered in a native window outside the React root view.
+
+A press that lands on the popup's own content is the content's — it never
+dismisses the popup. Pressing outside does, unless you pass
+`disableDismissWhenTouchOutside` to `Root`. For a text popup, pressing the
+bubble also dismisses it unless you pass `disableTapToDismiss` to `Popup`.
+
+### Behaviour on native
+
+- The popup follows its trigger while the page scrolls, and closes once the
+  trigger has scrolled out of sight.
+- It flips to the opposite side when the chosen one does not fit, and is kept
+  8pt clear of the display edge. The arrow stays pointed at the trigger either
+  way.
+- `showDuration` / `dismissDuration` are iOS only.
 
 > If your app enables Metro's `inlineRequires` transform, Base UI's module-level side effects can be deferred in a way that triggers a recoverable React error on first render. Prefer leaving `inlineRequires` off for web builds (the Expo default config already handles this).
 
