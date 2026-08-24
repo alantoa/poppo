@@ -1,5 +1,16 @@
 import XCTest
 
+/// Run with `yarn test:ios`.
+///
+/// Note that running these installs a second app on the simulator —
+/// `universaltooltipexampleUITests-Runner` — whose icon sits next to the real
+/// one. Launching it by hand always dies instantly with "Library not loaded:
+/// @rpath/XCTest.framework/XCTest", because XCTest is only injected when the
+/// test harness starts it. That is expected; it is not the example crashing.
+/// Remove it with:
+///
+///     xcrun simctl uninstall booted expo.modules.universaltooltip.example.uitests.xctrunner
+///
 /// Covers the parts of the popup that only a real touch can prove: the popup
 /// is presented in an overlay on the window, outside React Native's own view
 /// hierarchy, so every press inside it has to travel back to JS through a
