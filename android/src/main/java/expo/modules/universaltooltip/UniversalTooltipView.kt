@@ -73,6 +73,12 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
     var disableTapToDismiss: Boolean = false
     var borderRadius: Float = 5f
     var disableDismissWhenTouchOutside = false
+    /**
+     * Popover content is the point of the popup and takes its own touches;
+     * tooltip content is a hint, so the touch bridge stays off and Balloon's
+     * own click listener dismisses instead.
+     */
+    var interactive = true
     var bgColor: Int = Color.BLACK
 
     private var balloon: Balloon? = null
@@ -106,7 +112,7 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
      * the bubble — and the only way to follow is to build a new Balloon.
      */
     private fun chromeSignature(): String = listOf(
-        bgColor, arrowWidth, arrowHeight, side, borderRadius, text,
+        bgColor, arrowWidth, arrowHeight, side, borderRadius, text, interactive,
         textStyle?.color, textStyle?.fontSize, textStyle?.fontWeight,
         containerStyle?.paddingTop, containerStyle?.paddingBottom,
         containerStyle?.paddingLeft, containerStyle?.paddingRight,
@@ -446,7 +452,7 @@ class UniversalTooltipView(context: Context, appContext: AppContext) :
         val body = bodyView() ?: return null
         if (body.width == 0 || body.height == 0) return null
 
-        host.dispatchesToReact = true
+        host.dispatchesToReact = interactive
         clearBubbleBody(host)
         body.visibility = View.VISIBLE
         slotView?.visibility = View.VISIBLE

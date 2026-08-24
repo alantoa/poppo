@@ -3,10 +3,12 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 import {
+  AccessibilityInfo,
   Platform,
   Pressable,
   StyleSheet,
@@ -120,8 +122,11 @@ type AnchoredContextValue = {
 };
 
 export const createAnchoredSet = (
-  _kind: AnchoredPopupKind,
+  kind: AnchoredPopupKind,
 ): AnchoredPopupComponents => {
+  // A tooltip is a hint: its content never takes a touch, and pressing it
+  // dismisses. A popover is a surface: its content is the point of it.
+  const interactive = kind === "popover";
   const AnchoredContext = createContext<AnchoredContextValue>({
     open: false,
     setOpen: () => {},
@@ -135,9 +140,19 @@ export const createAnchoredSet = (
     closeDelay: _closeDelay,
     ...rest
   }: TriggerProps) => {
-    const { toggle } = useContext(AnchoredContext);
+    const { open, toggle } = useContext(AnchoredContext);
+    const state = useMemo(
+      () => ({ expanded: open, disabled: !!disabled }),
+      [open, disabled],
+    );
     return (
-      <Pressable disabled={disabled} onPress={toggle} {...rest}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={state}
+        disabled={disabled}
+        onPress={toggle}
+        {...rest}
+      >
         {children}
       </Pressable>
     );
@@ -213,7 +228,9 @@ export const createAnchoredSet = (
         <View
           nativeID={POPUP_BODY_NATIVE_ID}
           collapsable={false}
-          pointerEvents={open ? "auto" : "none"}
+          pointerEvents={interactive && open ? "auto" : "none"}
+          accessibilityLiveRegion={interactive ? "none" : "polite"}
+          importantForAccessibility={open ? "yes" : "no-hide-descendants"}
           style={bodyStyle}
           {...(Platform.OS === "android" && onTap ? { onTouchEnd: onTap } : {})}
           {...rest}
@@ -329,6 +346,15 @@ export const createAnchoredSet = (
       arrowHeight,
     } = parts;
 
+    // A natively drawn bubble is not in the React tree, so nothing announces
+    // it. Custom content is announced by its own live region instead (see
+    // `Popup`), which is the only option there — its children cannot be
+    // reduced to a string to read out.
+    useEffect(() => {
+      if (!open || !text) return;
+      AccessibilityInfo.announceForAccessibility(text);
+    }, [open, text]);
+
     const { style: rootStyle, ...rootRest } = rest;
     const nativeStyle = useMemo(
       () => [
@@ -355,6 +381,7 @@ export const createAnchoredSet = (
           disableTapToDismiss={popupProps.disableTapToDismiss}
           disableDrag={popupProps.disableDrag ?? true}
           onTap={popupProps.onTap}
+          interactive={interactive}
           disableDismissWhenTouchOutside={disableDismissWhenTouchOutside}
           {...nativeTextProps}
           text={text}

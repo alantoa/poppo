@@ -61,6 +61,9 @@ public class UniversalTooltipModule: Module {
       Prop("disableDrag") { (view, disableDrag: Bool?) in
         view.disableDrag = disableDrag ?? false
       }
+      Prop("interactive") { (view, interactive: Bool?) in
+        view.interactive = interactive ?? true
+      }
       Prop("disableDismissWhenTouchOutside") { (view, disableDismissWhenTouchOutside: Bool?) in
         view.disableDismissWhenTouchOutside = disableDismissWhenTouchOutside ?? false
       }

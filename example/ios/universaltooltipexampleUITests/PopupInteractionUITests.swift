@@ -56,18 +56,34 @@ final class PopupInteractionUITests: XCTestCase {
     )
   }
 
-  /// The whole point of custom content: a press inside the bubble is the
-  /// content's, not a dismissal.
-  func testPressInsideRichTooltipDoesNotDismissIt() {
+  /// A tooltip is a hint: its content does not take touches, and pressing it
+  /// puts it away.
+  func testPressingTooltipContentDismissesIt() {
     trigger("demo-tooltip-rich").tap()
     let bubble = app.staticTexts["Network available"]
     XCTAssertTrue(bubble.waitForExistence(timeout: uiTimeout))
 
-    app.staticTexts["Any React view works — press this line"].firstMatch.tap()
+    bubble.firstMatch.tap()
+
+    let gone = NSPredicate(format: "exists == false")
+    expectation(for: gone, evaluatedWith: bubble)
+    waitForExpectations(timeout: uiTimeout)
+  }
+
+  /// A popover is a surface: pressing its content is the content's business,
+  /// never a dismissal — even where nothing handles the press.
+  func testPressInsidePopoverContentDoesNotDismissIt() {
+    trigger("demo-popover-confirm").tap()
+    let title = app.staticTexts["Remove download?"]
+    XCTAssertTrue(title.waitForExistence(timeout: uiTimeout))
+
+    app.staticTexts["Buttons inside popovers stay interactive on every platform."]
+      .firstMatch
+      .tap()
 
     XCTAssertTrue(
-      bubble.exists,
-      "Pressing the tooltip's own content closed it; the touch was not handled by the content."
+      title.exists,
+      "Pressing the popover's own content closed it."
     )
   }
 

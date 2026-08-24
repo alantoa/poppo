@@ -92,6 +92,9 @@ class UniversalTooltipModule : Module() {
             Prop("bubbleColor") { view: UniversalTooltipView, bubbleColor: Int ->
                 view.bgColor = bubbleColor
             }
+            Prop("interactive") { view: UniversalTooltipView, interactive: Boolean ->
+                view.interactive = interactive
+            }
             Prop("disableDismissWhenTouchOutside") { view: UniversalTooltipView, disableDismissWhenTouchOutside: Boolean ->
                 view.disableDismissWhenTouchOutside = disableDismissWhenTouchOutside
             }

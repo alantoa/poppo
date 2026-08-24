@@ -13,7 +13,7 @@ handle anchoring, presentation and the platform differences underneath.
 
 | | Opens on | For |
 | --- | --- | --- |
-| **`Tooltip`** | hover (web) · press (native) | short, non-interactive hints |
+| **`Tooltip`** | hover (web) · press (native) | short hints — content is a label, not a surface |
 | **`Popover`** | click / press | interactive content — buttons inside work everywhere |
 | **`Toast`** | imperatively, via a manager | notifications, queued and de-duplicated |
 
@@ -166,8 +166,8 @@ Accepts every `View` prop.
 | `presetAnimation` | `"none" \| "fadeIn" \| "zoomIn"` | |
 | `showDuration` | `number` | **iOS** — ms. |
 | `dismissDuration` | `number` | **iOS** — ms. |
-| `disableTapToDismiss` | `boolean` | **native** — keep a text bubble open when it is pressed. |
-| `onTap` | `() => void` | Fires when a text bubble is pressed. |
+| `disableTapToDismiss` | `boolean` | **native** — keep a tooltip open when its bubble is pressed. |
+| `onTap` | `() => void` | **native** — fires when a tooltip's bubble is pressed. |
 | `className` | `string` | **web** |
 | `disableDrag` | `boolean` | Deprecated, does nothing. |
 
@@ -241,29 +241,46 @@ There are two rendering paths on native, chosen by what is inside `Popup`:
 
 On web every `ViewStyle` / `TextStyle` property works as-is.
 
+## Tooltip vs. Popover
+
+They share a part structure, but they are not the same component — a hint and a
+surface behave differently:
+
+| | `Tooltip` | `Popover` |
+| --- | --- | --- |
+| Content takes touches | no | yes |
+| Pressing the content | dismisses | is the content's to handle |
+| Assistive tech | announced as a hint | treated as a modal surface |
+
+So put a button inside a `Popover`, never a `Tooltip`.
+
 ## Behaviour on native
 
-- Custom content stays interactive — `onPress`, gestures and text inputs all
+- Popover content stays interactive — `onPress`, gestures and text inputs all
   work inside the bubble, using the same mechanism React Native's `Modal` uses
   (`RCTSurfaceTouchHandler` on iOS, a `RootView` + `JSTouchDispatcher` host on
-  Android). A press that lands on the popup's content is the content's; it
-  never dismisses the popup.
+  Android).
 - The popup follows its trigger while the page scrolls, and closes once the
   trigger has scrolled out of sight.
 - It flips to the opposite side when the chosen one does not fit, and is kept
   8pt clear of the display edge. The arrow stays pointed at the trigger either
   way.
 
-## Known gaps
+## Accessibility
 
-Worth knowing before reaching for these in production:
+- `Trigger` is a button and reports its `expanded` state.
+- A popover is a modal surface on iOS, so VoiceOver stays inside it while it is
+  open.
+- Text popups are announced when they open. Custom tooltip content is announced
+  through a live region on Android.
 
-- **`Tooltip` and `Popover` behave identically on native.** They differ on web
-  (hover with delays vs. click, focus trapping), but the native implementation
-  is shared and does not yet distinguish them.
-- **Accessibility on native is not implemented.** No roles are set, the popup
-  is not announced, and there is no focus management or back-button handling.
-  Pass your own `accessibilityLabel` to `Trigger` in the meantime.
+Still missing, and worth knowing before reaching for these in production:
+
+- **No focus management, and no back-button handling on Android.** A popover
+  does not move focus into itself or restore it on close.
+- **Custom tooltip content is not announced on iOS.** Its children cannot be
+  reduced to a string to read out; give the `Trigger` an `accessibilityHint`
+  instead.
 - **No `ref` forwarding and no `asChild` on native.** `Trigger` renders its own
   `Pressable` around your children.
 

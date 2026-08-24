@@ -107,9 +107,8 @@ const RichTooltip = () => {
                 </Text>
                 <Text
                   style={{ color: theme.onBubble, fontSize: 13, opacity: 0.72 }}
-                  onPress={() => undefined}
                 >
-                  Any React view works — press this line
+                  Any React view works — icon, layout, styles
                 </Text>
               </View>
             </View>
@@ -357,7 +356,7 @@ const Gallery = ({
             ))}
           </View>
         </Row>
-        <Row label="Rich content" subtitle="Icon + pressable text">
+        <Row label="Rich content" subtitle="Icon + custom layout">
           <RichTooltip />
         </Row>
       </Section>

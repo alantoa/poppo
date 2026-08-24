@@ -84,6 +84,9 @@ class UniversalTooltipView: ExpoView {
   var sideOffset: CGFloat = 1
   var disableTapToDismiss = false
   var disableDrag = false
+  /// Popover content is the point of the popup and takes its own touches;
+  /// tooltip content is a hint, so pressing it dismisses instead.
+  var interactive = true
   var disableDismissWhenTouchOutside = false
 
   var opened = false {
@@ -138,6 +141,7 @@ class UniversalTooltipView: ExpoView {
   /// and re-run the placement maths for nothing.
   private struct Chrome: Equatable {
     let color: UIColor
+    let interactive: Bool
     let side: ContentSide
     let cornerRadius: CGFloat
     let arrowWidth: Double
@@ -155,6 +159,7 @@ class UniversalTooltipView: ExpoView {
   private func currentChrome() -> Chrome {
     Chrome(
       color: bubbleBackgroundColor,
+      interactive: interactive,
       side: side,
       cornerRadius: cornerRadius,
       arrowWidth: arrowWidth,
@@ -487,6 +492,9 @@ class UniversalTooltipView: ExpoView {
     overlay.clipsToBounds = false
     overlay.dismissesOnOutsideTap = !disableDismissWhenTouchOutside
     overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    // Only a popover is a surface VoiceOver should be confined to. Setting
+    // this on the React body instead would do nothing — it has no siblings.
+    overlay.accessibilityViewIsModal = interactive
 
     let container = UIView()
     container.clipsToBounds = false
@@ -507,10 +515,12 @@ class UniversalTooltipView: ExpoView {
       textLabel.text = text
       container.addSubview(textLabel)
       label = textLabel
-      let tap = UITapGestureRecognizer(target: self, action: #selector(handleBubbleTap))
-      container.addGestureRecognizer(tap)
     } else {
       container.addSubview(contentHost)
+    }
+    if hasNativeText || !interactive {
+      let tap = UITapGestureRecognizer(target: self, action: #selector(handleBubbleTap))
+      container.addGestureRecognizer(tap)
     }
 
     overlay.bubble = container
@@ -784,5 +794,6 @@ class UniversalTooltipView: ExpoView {
     disableTapToDismiss = false
     disableDrag = false
     disableDismissWhenTouchOutside = false
+    interactive = true
   }
 }
