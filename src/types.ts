@@ -179,9 +179,10 @@ export type ToastAddOptions<Data = Record<string, unknown>> = Omit<
 
 export type ToastManager = {
   /**
-   * Shows a toast, or queues it when the visible limit is reached. Calling
-   * `add` again with the same `id` updates the existing toast and restarts
-   * its timer instead of enqueuing a duplicate.
+   * Shows a toast. When the visible limit is reached it is queued, or — with
+   * `overflow: "replace"` — the oldest visible toast is closed to make room.
+   * Calling `add` again with the same `id` updates the existing toast and
+   * restarts its timer instead of enqueuing a duplicate.
    */
   add: (options: ToastAddOptions) => string;
   /**
@@ -195,6 +196,20 @@ export type ToastManager = {
    */
   finalize: (id: string) => void;
   update: (id: string, options: Partial<ToastAddOptions>) => void;
+  /**
+   * Holds one toast's auto-dismiss countdown, keeping whatever time is left.
+   * `Toast.Root` calls this while the toast is being touched, dragged or
+   * hovered, so it does not vanish mid-interaction.
+   */
+  pause: (id: string) => void;
+  /** Lets a paused countdown run again from where it stopped. */
+  resume: (id: string) => void;
+  /**
+   * Holds every countdown. `Toast.Provider` calls this when the app leaves
+   * the foreground, so a toast is not spent while nobody can see it.
+   */
+  pauseAll: () => void;
+  resumeAll: () => void;
   /**
    * The currently visible toasts (newest first). Queued toasts are not
    * included — they appear as visible slots free up.

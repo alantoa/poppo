@@ -12,3 +12,6 @@ __tests__
 /android/build/
 /example/
 
+
+# The universal-tooltip shim publishes on its own from that directory.
+/alias/

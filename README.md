@@ -1,10 +1,10 @@
 <div align="center">
 
-# universal-tooltip
+# poppo
 
-Anchored-popup primitives for React Native and the web.
+Tooltip, popover and toast for React Native and the web.
 
-[![npm](https://img.shields.io/npm/l/universal-tooltip?style=flat-square)](https://www.npmjs.com/package/universal-tooltip) [![expo](https://img.shields.io/badge/Runs%20with%20Expo-4630EB.svg?style=flat-square&logo=EXPO&labelColor=f3f3f3&logoColor=000)](https://expo.io/)
+[![npm](https://img.shields.io/npm/v/poppo?style=flat-square)](https://www.npmjs.com/package/poppo) [![license](https://img.shields.io/npm/l/poppo?style=flat-square)](https://www.npmjs.com/package/poppo) [![expo](https://img.shields.io/badge/Runs%20with%20Expo-4630EB.svg?style=flat-square&logo=EXPO&labelColor=f3f3f3&logoColor=000)](https://expo.io/)
 
 </div>
 
@@ -15,7 +15,7 @@ handle anchoring, presentation and the platform differences underneath.
 | --- | --- | --- |
 | **`Tooltip`** | hover (web) · press (native) | short hints — content is a label, not a surface |
 | **`Popover`** | click / press | interactive content — buttons inside work everywhere |
-| **`Toast`** | imperatively, via a manager | notifications, queued and de-duplicated |
+| **`Toast`** | imperatively, via a manager | notifications, queued or replaced, de-duplicated |
 
 On web the anchored components wrap [Base UI](https://base-ui.com)'s `Tooltip`
 and `Popover`. On native they are a real native popup window — a UIKit overlay
@@ -26,8 +26,11 @@ z-order of the screen behind it.
 ## Install
 
 ```sh
-yarn add universal-tooltip
+yarn add poppo
 ```
+
+Coming from `universal-tooltip`? It is the same package, renamed for 2.0 —
+change the import path and nothing else.
 
 Web additionally needs the Base UI peer dependency:
 
@@ -44,7 +47,7 @@ Expo SDK 53+ default build settings already satisfy the native requirements
 one-word change.
 
 ```tsx
-import { Tooltip } from "universal-tooltip";
+import { Tooltip } from "poppo";
 import { Text } from "react-native";
 
 <Tooltip.Root>
@@ -86,7 +89,7 @@ const [open, setOpen] = useState(false);
 Toasts are imperative. Wrap the app once, render a viewport, then call `add`:
 
 ```tsx
-import { Toast, useToastManager } from "universal-tooltip";
+import { Toast, useToastManager } from "poppo";
 
 <Toast.Provider timeout={5000} limit={1}>
   <App />
@@ -183,17 +186,29 @@ Accepts every `View` prop.
 ### Toast
 
 `Toast.Provider` creates a manager (or accepts one via `toastManager`) and takes
-`timeout` (ms, `0` disables auto-dismiss) and `limit` (how many are visible at
-once; the rest queue).
+`timeout` (ms, `0` disables auto-dismiss), `limit` (how many are visible at
+once, default `1`) and `overflow` — what happens to the next toast once the
+limit is reached:
+
+| `overflow` | Behaviour |
+| --- | --- |
+| `"queue"` (default) | Holds it until a visible toast goes away, then shows it for its full `timeout`. Strict FIFO — five taps means the fifth shows ~20 s later. |
+| `"replace"` | Closes the oldest visible toast so the new one shows at once. The Android Snackbar convention, and usually what a phone wants. |
+
+A toast's countdown pauses while it is being touched, swiped or (on web)
+hovered, and while the app is in the background, so it cannot vanish under a
+finger or expire unseen.
 
 `useToastManager()` returns the manager plus the visible `toasts`:
 
 | Method | Notes |
 | --- | --- |
-| `add(options)` | Shows or queues a toast, and returns its id. Calling it again with the same `id` **updates** that toast and restarts its timer instead of stacking a duplicate. |
+| `add(options)` | Shows a toast (queueing or replacing per `overflow`), and returns its id. Calling it again with the same `id` **updates** that toast and restarts its timer instead of stacking a duplicate. |
 | `close(id)` | Starts the exit animation. |
-| `update(id, options)` | |
+| `update(id, options)` | Changes a toast's content without touching its timer. |
 | `finalize(id)` | Removes immediately. `Toast.Root` calls this after its exit animation. |
+| `pause(id)` / `resume(id)` | Hold a countdown, keeping the time left. `Toast.Root` does this during interaction. |
+| `pauseAll()` / `resumeAll()` | Hold every countdown. `Toast.Provider` does this when the app leaves the foreground. |
 
 Render them yourself:
 

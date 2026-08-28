@@ -1,7 +1,7 @@
 {
-  "name": "universal-tooltip",
+  "name": "poppo",
   "version": "1.1.0",
-  "description": "react native universal tooltip component.",
+  "description": "Tooltip, popover and toast for Expo and React Native — native popups on iOS and Android, Base UI on web.",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
@@ -10,7 +10,7 @@
     "lint": "expo-module lint",
     "test": "expo-module test",
     "prepare": "expo-module prepare  && yarn copy-files",
-    "prepublishOnly": "expo-module prepublishOnly",
+    "prepublishOnly": "expo-module prepublishOnly && yarn copy-files",
     "expo-module": "expo-module",
     "open:ios": "open -a \"Xcode\" example/ios",
     "open:android": "open -a \"Android Studio\" example/android",
@@ -20,27 +20,36 @@
   "keywords": [
     "react-native",
     "expo",
-    "universal-tooltip",
-    "UniversalTooltip"
+    "tooltip",
+    "popover",
+    "toast",
+    "popup",
+    "universal",
+    "ios",
+    "android",
+    "web",
+    "poppo",
+    "universal-tooltip"
   ],
-  "repository": "https://github.com/alantoa/universal-tooltip",
+  "repository": "https://github.com/alantoa/poppo",
   "bugs": {
-    "url": "https://github.com/alantoa/universal-tooltip/issues"
+    "url": "https://github.com/alantoa/poppo/issues"
   },
   "author": "alantoa <toacncom@gmail.com> (https://github.com/alantoa)",
   "license": "MIT",
-  "homepage": "https://github.com/alantoa/universal-tooltip#readme",
+  "homepage": "https://github.com/alantoa/poppo#readme",
   "devDependencies": {
     "@base-ui/react": "^1.7.0",
     "@types/react": "~19.2.18",
     "eslint": "^8.57.1",
-    "prettier": "^3.6.2",
-    "release-it": "^21.0.1",
-    "rimraf": "^6.0.1",
     "expo-module-scripts": "^56.0.3",
     "expo-modules-core": "~57.0.10",
+    "jest": "^29.7.0",
+    "prettier": "^3.6.2",
     "react": "19.2.0",
     "react-native": "0.86.2",
+    "release-it": "^21.0.1",
+    "rimraf": "^6.0.1",
     "typescript": "~5.9.2"
   },
   "peerDependencies": {
@@ -58,5 +67,23 @@
       "release": true
     }
   },
-  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e",
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "module": "commonjs",
+            "jsx": "react-jsx",
+            "verbatimModuleSyntax": false
+          }
+        }
+      ]
+    }
+  }
 }

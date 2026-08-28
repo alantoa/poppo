@@ -20,7 +20,7 @@ config.resolver.nodeModulesPaths = [
 ];
 
 config.resolver.extraNodeModules = {
-  "universal-tooltip": "..",
+  poppo: "..",
 };
 
 config.watchFolders = [path.resolve(__dirname, "..")];

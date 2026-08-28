@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.homepage       = package['homepage']
   s.platform       = :ios, '16.4'
   s.swift_version  = '5.9'
-  s.source         = { git: 'https://github.com/alantoa/universal-tooltip' }
+  s.source         = { git: 'https://github.com/alantoa/poppo' }
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'

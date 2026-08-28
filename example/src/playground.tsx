@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, ScrollView, Text, useColorScheme, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -8,8 +8,13 @@ import {
   Toast,
   Tooltip,
   useToastManager,
-} from "universal-tooltip";
-import type { Side, ToastObject, ToastViewportPosition } from "universal-tooltip";
+} from "poppo";
+import type {
+  Side,
+  ToastObject,
+  ToastOverflow,
+  ToastViewportPosition,
+} from "poppo";
 
 import { isMobileWeb } from "./platform";
 import {
@@ -35,6 +40,11 @@ const SIDES: { value: Side; label: string }[] = [
   { value: "bottom", label: "Bottom" },
   { value: "left", label: "Left" },
   { value: "right", label: "Right" },
+];
+
+const OVERFLOWS: { value: ToastOverflow; label: string }[] = [
+  { value: "queue", label: "Queue" },
+  { value: "replace", label: "Replace" },
 ];
 
 const POSITIONS: { value: ToastViewportPosition; label: string }[] = [
@@ -316,11 +326,16 @@ const ToastViewport = ({ position }: { position: ToastViewportPosition }) => {
 const Gallery = ({
   position,
   setPosition,
+  overflow,
+  setOverflow,
 }: {
   position: ToastViewportPosition;
   setPosition: (next: ToastViewportPosition) => void;
+  overflow: ToastOverflow;
+  setOverflow: (next: ToastOverflow) => void;
 }) => {
   const toast = useToastManager();
+  const burst = useRef(0);
 
   return (
     <View style={{ gap: 28 }}>
@@ -367,7 +382,7 @@ const Gallery = ({
       <Section
         index="03"
         title="Toast"
-        hint="Same id refreshes. Different ids queue. Timeout 0 stays."
+        hint="Same id refreshes. New ids queue or replace. Holding pauses."
       >
         <Row label="Title">
           <Button
@@ -417,6 +432,23 @@ const Gallery = ({
             }
           />
         </Row>
+        <Row label="New id each tap" subtitle={`overflow: "${overflow}"`}>
+          <Button
+            testID="demo-toast-burst"
+            label="Show"
+            onPress={() => {
+              const n = ++burst.current;
+              toast.add({ title: `Message ${n}`, timeout: 3000 });
+            }}
+          />
+        </Row>
+        <Row label="Overflow" subtitle="Switching clears the toasts" stack>
+          <Segmented
+            options={OVERFLOWS}
+            value={overflow}
+            onChange={setOverflow}
+          />
+        </Row>
         <Row label="Position" stack>
           <Segmented
             options={POSITIONS}
@@ -433,10 +465,14 @@ const Shell = ({
   themeName,
   onThemeChange,
   showSwitcher,
+  overflow,
+  setOverflow,
 }: {
   themeName: ThemeName;
   onThemeChange?: (next: ThemeName) => void;
   showSwitcher: boolean;
+  overflow: ToastOverflow;
+  setOverflow: (next: ToastOverflow) => void;
 }) => {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -467,7 +503,12 @@ const Shell = ({
             <ThemeSwitch value={themeName} onChange={onThemeChange} />
           ) : null}
         </View>
-        <Gallery position={position} setPosition={setPosition} />
+        <Gallery
+          position={position}
+          setPosition={setPosition}
+          overflow={overflow}
+          setOverflow={setOverflow}
+        />
       </ScrollView>
       <ToastViewport position={position} />
     </View>
@@ -481,16 +522,21 @@ export function Playground({
 } = {}) {
   const system = useColorScheme();
   const [themeName, setThemeName] = useState<ThemeName | null>(null);
+  const [overflow, setOverflow] = useState<ToastOverflow>("queue");
   const name =
     lockedTheme ?? themeName ?? (system === "dark" ? "dark" : "light");
 
   return (
     <ThemeProvider name={name}>
-      <Toast.Provider>
+      {/* The manager is created once per Provider, so changing `overflow`
+          remounts it — and drops whatever toasts were up. */}
+      <Toast.Provider key={overflow} overflow={overflow}>
         <Shell
           themeName={name}
           onThemeChange={lockedTheme ? undefined : setThemeName}
           showSwitcher={!lockedTheme}
+          overflow={overflow}
+          setOverflow={setOverflow}
         />
       </Toast.Provider>
     </ThemeProvider>

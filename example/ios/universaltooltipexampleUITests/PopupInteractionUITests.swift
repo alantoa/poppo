@@ -36,6 +36,21 @@ final class PopupInteractionUITests: XCTestCase {
     app.descendants(matching: .any).matching(identifier: identifier).firstMatch
   }
 
+  /// The toast section sits below the fold on a phone. XCTest does not scroll
+  /// on its own, so swipe until the control is hittable.
+  private func scrollTo(_ element: XCUIElement) {
+    for _ in 0..<6 where !element.isHittable {
+      app.scrollViews.firstMatch.swipeUp()
+    }
+    XCTAssertTrue(element.isHittable, "Could not scroll \(element) into view.")
+  }
+
+  private func waitToVanish(_ element: XCUIElement, timeout: TimeInterval) {
+    let gone = NSPredicate(format: "exists == false")
+    expectation(for: gone, evaluatedWith: element)
+    waitForExpectations(timeout: timeout)
+  }
+
   /// Taps by coordinate rather than by element: while a popup is open the
   /// overlay covers everything behind it, so no element back there is
   /// "hittable" as far as XCTest is concerned — which is the behaviour under
@@ -136,7 +151,11 @@ final class PopupInteractionUITests: XCTestCase {
     expectation(for: opened, evaluatedWith: copies)
     waitForExpectations(timeout: uiTimeout)
 
-    copies.element(boundBy: initial).tap()
+    // The bubble's copy is the hittable one — the row's own label sits under
+    // the overlay. Which of the two the query lists first varies by iOS.
+    let bubble = copies.allElementsBoundByIndex.first { $0.isHittable }
+    XCTAssertNotNil(bubble, "No hittable copy of the bubble text was found.")
+    bubble?.tap()
 
     let closed = NSPredicate(format: "count == %d", initial)
     expectation(for: closed, evaluatedWith: copies)
@@ -162,6 +181,73 @@ final class PopupInteractionUITests: XCTestCase {
       expectation(for: closed, evaluatedWith: copies)
       waitForExpectations(timeout: uiTimeout)
     }
+  }
+
+  // MARK: Toast
+
+  /// A toast under a finger must not expire. The default timeout is 5 s; the
+  /// hold lasts longer than that, and the toast has to still be there when
+  /// the finger lifts — then go away on its own once the timer resumes.
+  func testHoldingAToastPausesItsTimer() {
+    let button = trigger("demo-toast-title")
+    scrollTo(button)
+    button.tap()
+
+    // React Native exposes a Text as two nested StaticTexts with the same
+    // label; `press` needs exactly one.
+    let toast = app.staticTexts["Saved"].firstMatch
+    XCTAssertTrue(toast.waitForExistence(timeout: uiTimeout))
+
+    toast.press(forDuration: 6.5)
+    XCTAssertTrue(
+      toast.exists,
+      "The toast expired while it was being held."
+    )
+
+    // Whatever was left of the 5 s runs from here.
+    waitToVanish(toast, timeout: uiTimeout)
+  }
+
+  /// The default `overflow: "queue"`: a second toast waits for the first
+  /// (3 s in the example) and then gets its own full timeout.
+  func testQueueOverflowHoldsTheSecondToast() {
+    let button = trigger("demo-toast-burst")
+    scrollTo(button)
+    button.tap()
+    button.tap()
+
+    let first = app.staticTexts["Message 1"]
+    let second = app.staticTexts["Message 2"]
+    XCTAssertTrue(first.waitForExistence(timeout: uiTimeout))
+    Thread.sleep(forTimeInterval: 1)
+    XCTAssertFalse(second.exists, "The queued toast showed before its turn.")
+
+    XCTAssertTrue(
+      second.waitForExistence(timeout: uiTimeout),
+      "The queued toast never got promoted."
+    )
+    waitToVanish(first, timeout: uiTimeout)
+  }
+
+  /// `overflow: "replace"`: the newest toast shows at once and the one it
+  /// replaces animates out.
+  func testReplaceOverflowShowsTheNewestAtOnce() {
+    let replace = trigger("segment-replace")
+    scrollTo(replace)
+    replace.tap()
+
+    let button = trigger("demo-toast-burst")
+    scrollTo(button)
+    button.tap()
+    button.tap()
+
+    let second = app.staticTexts["Message 2"]
+    XCTAssertTrue(
+      second.waitForExistence(timeout: 2),
+      "The replacing toast did not show immediately."
+    )
+    waitToVanish(app.staticTexts["Message 1"], timeout: uiTimeout)
+    XCTAssertTrue(second.exists)
   }
 
   func testPopupSurvivesRepeatedOpenAndClose() {

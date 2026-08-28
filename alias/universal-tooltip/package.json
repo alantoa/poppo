@@ -1,0 +1,33 @@
+{
+  "name": "universal-tooltip",
+  "version": "2.0.0",
+  "description": "Renamed to `poppo`. This package re-exports it so existing imports keep working; please switch to `poppo`.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "repository": "https://github.com/alantoa/poppo",
+  "homepage": "https://github.com/alantoa/poppo#readme",
+  "author": "alantoa <toacncom@gmail.com> (https://github.com/alantoa)",
+  "license": "MIT",
+  "keywords": [
+    "react-native",
+    "expo",
+    "tooltip",
+    "popover",
+    "toast",
+    "poppo"
+  ],
+  "dependencies": {
+    "poppo": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@base-ui/react": "*",
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

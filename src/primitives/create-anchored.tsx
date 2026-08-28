@@ -298,7 +298,7 @@ export const createAnchoredSet = (
       const hasParts = React.Children.toArray(withoutTrigger).length > 0;
       if (__DEV__ && popupEl == null && hasParts) {
         console.warn(
-          "[universal-tooltip] No <Popup> found, so the popup's own props " +
+          "[poppo] No <Popup> found, so the popup's own props " +
             "(side, animation, arrow, colours) fall back to defaults.\n" +
             "Parts are read from the elements you write inside <Root>, so " +
             "they cannot be wrapped in a component of your own: React has " +

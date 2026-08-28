@@ -8,7 +8,9 @@ import React, {
 } from "react";
 import {
   Animated,
+  AppState,
   PanResponder,
+  Platform,
   Pressable,
   Text as RNText,
   View,
@@ -25,8 +27,10 @@ import type { ToastAddOptions, ToastManager, ToastObject } from "./types";
 // Manager — a small external store with queue scheduling, mirroring Base UI's
 // Toast.createToastManager():
 //
-// - At most `limit` toasts are visible at once (default 1). Adding more
-//   enqueues them; they are promoted as visible slots free up.
+// - At most `limit` toasts are visible at once (default 1). What happens to
+//   the next one is `overflow`: "queue" (default) holds it until a slot frees
+//   up; "replace" closes the oldest visible toast so the new one shows at
+//   once — the Android Snackbar convention, and usually what a phone wants.
 // - `add` with an existing `id` UPDATES that toast and restarts its timer —
 //   pressing the same button repeatedly refreshes one toast instead of
 //   stacking duplicates.
@@ -34,7 +38,10 @@ import type { ToastAddOptions, ToastManager, ToastObject } from "./types";
 //   `finalize` (called by Toast.Root when the animation ends, with a safety
 //   fallback timer) removes it and promotes the next queued toast.
 // - Auto-dismiss timers only run while a toast is visible — queued toasts
-//   get their full timeout once shown.
+//   get their full timeout once shown. A timer can be paused: `Toast.Root`
+//   holds it while the toast is being touched, dragged or hovered, and
+//   `Toast.Provider` suspends all of them while the app is in the background,
+//   so a toast never expires under a finger or while nobody can see it.
 
 let idCounter = 0;
 
@@ -43,52 +50,109 @@ let idCounter = 0;
 // long finished.
 const FINALIZE_FALLBACK_MS = 600;
 
-export const createToastManager = (defaults?: {
+export type ToastOverflow = "queue" | "replace";
+
+export type ToastManagerOptions = {
   /**
    * Default auto-dismiss timeout in milliseconds. 0 disables auto-dismiss.
    * @default 5000
    */
   timeout?: number;
   /**
-   * Maximum number of toasts visible at once — additional toasts are queued.
+   * Maximum number of toasts visible at once.
    * @default 1
    */
   limit?: number;
-}): ToastManager => {
+  /**
+   * What happens to a new toast when `limit` is reached: `"queue"` shows it
+   * once a visible toast goes away; `"replace"` closes the oldest visible
+   * toast so the new one shows immediately.
+   * @default "queue"
+   */
+  overflow?: ToastOverflow;
+};
+
+/** A running or paused auto-dismiss countdown. */
+type Countdown = {
+  handle: ReturnType<typeof setTimeout> | null;
+  /** Milliseconds left the last time the countdown was (re)started or paused. */
+  remaining: number;
+  /** When `handle` was scheduled; meaningless while paused. */
+  startedAt: number;
+};
+
+export const createToastManager = (
+  defaults?: ToastManagerOptions,
+): ToastManager => {
   const defaultTimeout = defaults?.timeout ?? 5000;
   const limit = Math.max(1, defaults?.limit ?? 1);
+  const overflow: ToastOverflow = defaults?.overflow ?? "queue";
 
   let visible: ToastObject[] = [];
   let queue: ToastObject[] = [];
   const listeners = new Set<() => void>();
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const countdowns = new Map<string, Countdown>();
+  const fallbacks = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Toasts whose countdown is held by an interaction (`pause`). */
+  const held = new Set<string>();
+  /** Every countdown is held (`pauseAll`) — the app is in the background. */
+  let suspended = false;
 
   const notify = () => listeners.forEach((listener) => listener());
 
-  const clearTimer = (id: string) => {
-    const timer = timers.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      timers.delete(id);
-    }
+  // Schedules the countdown unless something is holding it. Idempotent.
+  const run = (id: string) => {
+    const countdown = countdowns.get(id);
+    if (!countdown || countdown.handle || held.has(id) || suspended) return;
+    countdown.startedAt = Date.now();
+    countdown.handle = setTimeout(() => {
+      countdowns.delete(id);
+      close(id);
+    }, countdown.remaining);
+  };
+
+  // Unschedules the countdown, remembering how much was left. Idempotent.
+  const halt = (id: string) => {
+    const countdown = countdowns.get(id);
+    if (!countdown?.handle) return;
+    clearTimeout(countdown.handle);
+    countdown.handle = null;
+    countdown.remaining = Math.max(
+      0,
+      countdown.remaining - (Date.now() - countdown.startedAt),
+    );
+  };
+
+  const stopTimer = (id: string) => {
+    halt(id);
+    countdowns.delete(id);
   };
 
   const startTimer = (toast: ToastObject) => {
-    clearTimer(toast.id);
+    stopTimer(toast.id);
     const dismissAfter = toast.timeout ?? defaultTimeout;
     if (dismissAfter > 0) {
-      timers.set(
-        toast.id,
-        setTimeout(() => close(toast.id), dismissAfter),
-      );
+      countdowns.set(toast.id, {
+        handle: null,
+        remaining: dismissAfter,
+        startedAt: 0,
+      });
+      run(toast.id);
     }
   };
 
-  const openCount = () =>
-    visible.filter((toast) => toast.state !== "closing").length;
+  const clearFallback = (id: string) => {
+    const fallback = fallbacks.get(id);
+    if (fallback) {
+      clearTimeout(fallback);
+      fallbacks.delete(id);
+    }
+  };
+
+  const openToasts = () => visible.filter((toast) => toast.state !== "closing");
 
   const promote = () => {
-    while (queue.length > 0 && openCount() < limit) {
+    while (queue.length > 0 && openToasts().length < limit) {
       const next = queue[0] as ToastObject;
       queue = queue.slice(1);
       visible = [{ ...next, state: "open" }, ...visible];
@@ -97,7 +161,7 @@ export const createToastManager = (defaults?: {
   };
 
   const close = (id: string) => {
-    clearTimer(id);
+    stopTimer(id);
     // Still queued — drop silently.
     const queuedIndex = queue.findIndex((toast) => toast.id === id);
     if (queuedIndex !== -1) {
@@ -114,14 +178,17 @@ export const createToastManager = (defaults?: {
     promote();
     notify();
     // Safety net in case no Toast.Root finalizes this toast.
-    timers.set(
+    clearFallback(id);
+    fallbacks.set(
       id,
       setTimeout(() => finalize(id), FINALIZE_FALLBACK_MS),
     );
   };
 
   const finalize = (id: string) => {
-    clearTimer(id);
+    stopTimer(id);
+    clearFallback(id);
+    held.delete(id);
     const next = visible.filter((toast) => toast.id !== id);
     const changed = next.length !== visible.length;
     visible = next;
@@ -139,6 +206,7 @@ export const createToastManager = (defaults?: {
     // finishing its animation would take the new one with it.
     const visibleExisting = visible.find((toast) => toast.id === id);
     if (visibleExisting) {
+      clearFallback(id);
       visible = visible.map((toast) =>
         toast.id === id
           ? { ...toast, ...options, id, state: "open" as const }
@@ -158,12 +226,19 @@ export const createToastManager = (defaults?: {
     }
 
     const toast: ToastObject = { ...options, id, state: "open" };
-    if (openCount() < limit) {
-      visible = [toast, ...visible];
-      startTimer(toast);
-    } else {
-      queue = [...queue, toast];
+    const open = openToasts();
+    if (open.length >= limit) {
+      if (overflow === "queue") {
+        queue = [...queue, toast];
+        notify();
+        return id;
+      }
+      // "replace": the oldest open toast makes room. `visible` is newest
+      // first, so that is the last open entry.
+      close((open[open.length - 1] as ToastObject).id);
     }
+    visible = [toast, ...visible];
+    startTimer(toast);
     notify();
     return id;
   };
@@ -178,11 +253,35 @@ export const createToastManager = (defaults?: {
     notify();
   };
 
+  const pause = (id: string) => {
+    held.add(id);
+    halt(id);
+  };
+
+  const resume = (id: string) => {
+    held.delete(id);
+    run(id);
+  };
+
+  const pauseAll = () => {
+    suspended = true;
+    countdowns.forEach((_, id) => halt(id));
+  };
+
+  const resumeAll = () => {
+    suspended = false;
+    countdowns.forEach((_, id) => run(id));
+  };
+
   return {
     add,
     close,
     finalize,
     update,
+    pause,
+    resume,
+    pauseAll,
+    resumeAll,
     getToasts: () => visible,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -222,11 +321,17 @@ export type ToastProviderProps = {
    */
   timeout?: number;
   /**
-   * Maximum number of toasts visible at once (used by the internal manager);
-   * additional toasts are queued.
+   * Maximum number of toasts visible at once (used by the internal manager).
    * @default 1
    */
   limit?: number;
+  /**
+   * What happens to a new toast once `limit` is reached (used by the internal
+   * manager): `"queue"` shows it when a slot frees up, `"replace"` closes the
+   * oldest visible toast so it shows immediately.
+   * @default "queue"
+   */
+  overflow?: ToastOverflow;
 };
 
 export const Provider = ({
@@ -234,10 +339,11 @@ export const Provider = ({
   toastManager,
   timeout,
   limit,
+  overflow,
 }: ToastProviderProps) => {
   const internal = useRef<ToastManager | null>(null);
   if (!toastManager && internal.current === null) {
-    internal.current = createToastManager({ timeout, limit });
+    internal.current = createToastManager({ timeout, limit, overflow });
   }
   const manager = toastManager ?? internal.current!;
   const toasts = useSyncExternalStore(
@@ -245,6 +351,17 @@ export const Provider = ({
     manager.getToasts,
     manager.getToasts,
   );
+  // A toast should not spend its timeout while the app is not on screen.
+  // "inactive" (app switcher, control centre, an incoming call) counts too.
+  // On web `AppState` is backed by `visibilitychange`, so a hidden tab pauses
+  // as well.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") manager.resumeAll();
+      else manager.pauseAll();
+    });
+    return () => subscription.remove();
+  }, [manager]);
   const value = useMemo(() => ({ manager, toasts }), [manager, toasts]);
   return (
     <ToastContext.Provider value={value}>{children}</ToastContext.Provider>
@@ -408,11 +525,41 @@ export const Root = ({
   const pan = useRef(new Animated.ValueXY()).current;
   const gestureConfig = useRef({ position, swipeToDismiss, id: toast.id });
   gestureConfig.current = { position, swipeToDismiss, id: toast.id };
+  // The countdown is held while the toast is under a finger (or, on web, a
+  // hovering or dragging mouse) so it cannot vanish mid-interaction. Touch
+  // and hover are tracked separately and the manager is only told about the
+  // combined state, so lifting a finger does not resume a toast that is still
+  // hovered. Raw `onTouch*` rather than the responder callbacks: those only
+  // fire once the pan takes over, but a plain press on a child button must
+  // hold the timer too. The responder's grant/release cover the web mouse,
+  // which fires no touch events.
+  const holds = useRef({ touch: false, hover: false });
+  const hold = (kind: "touch" | "hover", active: boolean) => {
+    const before = holds.current.touch || holds.current.hover;
+    holds.current[kind] = active;
+    const after = holds.current.touch || holds.current.hover;
+    if (before === after) return;
+    if (after) context?.manager.pause(gestureConfig.current.id);
+    else context?.manager.resume(gestureConfig.current.id);
+  };
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  // A Root taken down mid-touch (its viewport unmounting under a finger)
+  // would otherwise leave its id held for good — and ids are reused.
+  useEffect(
+    () => () => {
+      holdRef.current("touch", false);
+      holdRef.current("hover", false);
+    },
+    [],
+  );
+
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_event, gesture) =>
         gestureConfig.current.swipeToDismiss &&
         (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8),
+      onPanResponderGrant: () => holdRef.current("touch", true),
       onPanResponderMove: (_event, gesture) => {
         // Vertical movement is only allowed toward the nearest screen edge.
         const towardsTop = gestureConfig.current.position.startsWith("top");
@@ -448,6 +595,7 @@ export const Root = ({
             bounciness: 6,
           }).start();
         }
+        holdRef.current("touch", false);
       },
       onPanResponderTerminate: () => {
         Animated.spring(pan, {
@@ -455,9 +603,22 @@ export const Root = ({
           useNativeDriver: false,
           bounciness: 6,
         }).start();
+        holdRef.current("touch", false);
       },
     }),
   ).current;
+
+  const interactionHandlers = {
+    onTouchStart: () => holdRef.current("touch", true),
+    onTouchEnd: () => holdRef.current("touch", false),
+    onTouchCancel: () => holdRef.current("touch", false),
+    ...(Platform.OS === "web"
+      ? {
+          onMouseEnter: () => holdRef.current("hover", true),
+          onMouseLeave: () => holdRef.current("hover", false),
+        }
+      : null),
+  };
 
   // One effect for both directions: entering on mount, leaving when the
   // manager marks the toast closing — and entering again if the same id is
@@ -515,6 +676,7 @@ export const Root = ({
   return (
     <ToastItemContext.Provider value={toast}>
       <Animated.View
+        {...interactionHandlers}
         {...(swipeToDismiss ? panResponder.panHandlers : {})}
         style={
           {

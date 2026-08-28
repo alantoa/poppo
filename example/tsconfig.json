@@ -3,8 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "universal-tooltip": ["../src/index"],
-      "universal-tooltip/*": ["../src/*"]
+      "poppo": ["../src/index"],
+      "poppo/*": ["../src/*"]
     }
   }
 }

@@ -1,7 +1,9 @@
-# Working on universal-tooltip
+# Working on poppo
 
 An Expo module: anchored popups (tooltip, popover) plus a toast manager, for
-iOS, Android and web. `src/` is the JS surface, `ios/` is Swift, `android/` is
+iOS, Android and web. Published on npm as `poppo`; it was `universal-tooltip`
+through 1.x, and `alias/universal-tooltip` is the shim that keeps the old name
+installing. `src/` is the JS surface, `ios/` is Swift, `android/` is
 Kotlin, and `example/` is a playground app that doubles as the test bed.
 
 This file records what is **not** discoverable by reading the code — the
@@ -12,9 +14,10 @@ break silently when violated. Everything else, read from the source.
 
 ```sh
 yarn lint                       # eslint (src only)
+yarn test                       # jest: the toast manager's schedule (see below)
 npx tsc --noEmit                # library
 npx tsc --noEmit -p example/tsconfig.json
-yarn prepare                    # build to build/ (does NOT clean; see below)
+yarn build                      # tsc to build/ + copy the css (does NOT clean; see below)
 
 cd example
 yarn start                      # Metro
@@ -31,10 +34,22 @@ that do not name the cause:
   `unicode_normalize` with `Encoding::CompatibilityError`:
   `cd example/ios && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install`
 
-`yarn prepare` compiles without cleaning, so files deleted from `src/` linger in
+`yarn test` is deliberately **not** on the `expo-module-scripts` jest preset:
+that preset needs `babel-preset-expo` and `expo` at the package root, which
+this library does not otherwise depend on. It is plain `ts-jest` in a node
+environment instead, and the test mocks `react-native` hollow — enough for the
+toast manager, which is pure JS. Anything that renders a component will need
+the real preset (and those dependencies) first.
+
+`yarn build` compiles without cleaning, so files deleted from `src/` linger in
 `build/`. That does not reach npm — `prepublishOnly` runs `expo-module clean`
 first — but do not trust `build/` after deleting a source file. `yarn clean`
-first.
+first. `yarn prepare` is **not** a build: in expo-module-scripts 56 it is a
+noop that prints a warning, so a `build/` holding only `styles.css` means
+nothing has been compiled. And `expo-module build` is bare `tsc`, which is why
+`build` and `prepublishOnly` both chain `yarn copy-files` — the web entry
+imports `./styles.css`, and without the copy the published package breaks on
+web only.
 
 ## The JS ↔ native contract
 
@@ -115,12 +130,35 @@ Screenshots are not enough for anything touch-related; drive it.
   impossible. The runner also dies instantly if launched from the home screen
   ("Library not loaded: @rpath/XCTest.framework/XCTest") — expected, not a
   crash in the example.
+  Two environment traps, both of which make **every** test fail before the
+  first assertion:
+  - The script boots the *newest* iPhone when none is booted. On an iOS 27
+    beta runtime the example dies at launch with `SIGTRAP` in
+    `__UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption` — the
+    app has no scene manifest and that runtime treats it as fatal. Pass
+    `SIMULATOR_UDID=<an iOS 26 or 18 device>`.
+  - The script reuses whatever answers on :8081, and Metro cannot tell whose
+    project it is. Another repo's `expo start` there means the example loads
+    the wrong bundle. Do not kill it: start this Metro on another port and
+    point the installed app at it, no rebuild needed —
+    `cd example && npx expo start --dev-client --port 8082`, then
+    `xcrun simctl spawn <udid> defaults write expo.modules.universaltooltip.example RCT_jsLocation "localhost:8082"`
+    (and `defaults delete` it afterwards, or `yarn ios` will look on 8082).
 - **Android**: drive it with `adb shell input tap`, and screenshot with
   `adb exec-out screencap -p`. Reset the scroll position first (the list drifts
   between runs) and confirm the app is actually foreground — a stray tap on the
   home screen launches something else and the rest of the run is garbage.
 
 ## Repo traps
+
+The npm name is `poppo`, but every native identifier still says
+`UniversalTooltip`: the Expo module name (`requireNativeViewManager(
+"UniversalTooltip")`), the pod, the Kotlin package `expo.modules.universaltooltip`,
+the `universal-tooltip-*` nativeIDs, the example's bundle id. That is deliberate.
+None of it is user-visible, and renaming it means touching Swift, Kotlin,
+`expo-module.config.json`, the example's Xcode project and the XCUITest runner
+id in one go, for nothing. Do not "tidy" it piecemeal — a half-renamed module
+fails autolinking with no useful error.
 
 `.gitignore` once listed bare `example/ios` and `example/android`, which hid
 real sources: this package's own `TooltipRootViewGroup.kt`, the example's
