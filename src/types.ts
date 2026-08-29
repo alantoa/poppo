@@ -37,7 +37,7 @@ export type RootProps = ViewProps & {
    */
   modal?: boolean;
   /**
-   * Android only
+   * Native only - keep the popup open when the user presses outside it.
    */
   disableDismissWhenTouchOutside?: boolean;
 };
