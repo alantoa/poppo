@@ -11,4 +11,5 @@ export type {
   ToastPresetAnimation,
   ToastProviderProps,
   ToastViewportPosition,
+  ToastViewportPresentation,
 } from "./toast";

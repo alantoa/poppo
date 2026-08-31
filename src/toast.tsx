@@ -21,6 +21,10 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import {
+  supportsWindowPresentation,
+  ToastOverlayHost,
+} from "./primitives/toast-overlay";
 import type { ToastAddOptions, ToastManager, ToastObject } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -416,19 +420,49 @@ export type ToastViewportProps = ViewProps & {
    */
   insets?: ToastViewportEdgeInsets;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Where the viewport renders.
+   *
+   * - `"inline"` (default) — an absolutely positioned view in the React tree,
+   *   bounded by its parent, like any other view.
+   * - `"window"` — **iOS only.** An overlay on the window itself, so a toast
+   *   is not clipped by an ancestor and is raised above an open `Modal`.
+   *   Because the overlay *is* the window, `position` measures from the screen
+   *   edges rather than from this component's parent. Falls back to `"inline"`
+   *   on Android and web.
+   */
+  presentation?: ToastViewportPresentation;
 };
+
+export type ToastViewportPresentation = "inline" | "window";
 
 /** Space between a toast and the edge it sits against. */
 const VIEWPORT_PADDING = 16;
+
+let warnedAboutPresentation = false;
 
 export const Viewport = ({
   children,
   position = "bottom",
   insets,
   style,
+  presentation = "inline",
   ...rest
 }: ToastViewportProps) => {
   const context = useMemo(() => ({ position }), [position]);
+  const inWindow = presentation === "window" && supportsWindowPresentation;
+  if (
+    __DEV__ &&
+    presentation === "window" &&
+    !supportsWindowPresentation &&
+    !warnedAboutPresentation
+  ) {
+    warnedAboutPresentation = true;
+    console.warn(
+      '[poppo] <Toast.Viewport presentation="window" /> is iOS-only; ' +
+        'falling back to "inline".',
+    );
+  }
   // Only the edges actually asked for are written, so a caller overriding
   // `padding` wholesale through `style` still works when there are no insets.
   const insetStyle = useMemo(
@@ -446,34 +480,54 @@ export const Viewport = ({
     }),
     [insets?.top, insets?.bottom, insets?.left, insets?.right],
   );
-  const vertical = position.startsWith("top") ? { top: 0 } : { bottom: 0 };
   const alignItems = position.endsWith("-start")
     ? ("flex-start" as const)
     : position.endsWith("-end")
       ? ("flex-end" as const)
       : ("center" as const);
+  // The window overlay is already the size of the screen, so the edge the
+  // toasts sit against is a justification inside it rather than a pinned side.
+  // `pointerEvents` stays first so a caller can still override it.
+  const layout = inWindow
+    ? ({
+        pointerEvents: "box-none",
+        justifyContent: position.startsWith("top")
+          ? ("flex-start" as const)
+          : ("flex-end" as const),
+        alignItems,
+        gap: 8,
+        padding: VIEWPORT_PADDING,
+      } as const)
+    : ({
+        pointerEvents: "box-none",
+        position: "absolute",
+        left: 0,
+        right: 0,
+        ...(position.startsWith("top") ? { top: 0 } : { bottom: 0 }),
+        alignItems,
+        gap: 8,
+        padding: VIEWPORT_PADDING,
+        zIndex: 1000,
+      } as const);
+  const viewportStyle = [layout, insetStyle, style];
   return (
     <ViewportContext.Provider value={context}>
-      <View
-        style={[
-          {
-            pointerEvents: "box-none",
-            position: "absolute",
-            left: 0,
-            right: 0,
-            ...vertical,
-            alignItems,
-            gap: 8,
-            padding: VIEWPORT_PADDING,
-            zIndex: 1000,
-          },
-          insetStyle,
-          style,
-        ]}
-        {...rest}
-      >
-        {children}
-      </View>
+      {inWindow ? (
+        <ToastOverlayHost
+          // What the overlay attaches and raises on. Counting the children
+          // rather than asking the manager keeps a viewport that renders a
+          // subset of the toasts honest.
+          toastCount={React.Children.count(children)}
+          style={viewportStyle}
+          {...rest}
+        >
+          {children}
+        </ToastOverlayHost>
+      ) : (
+        <View style={viewportStyle} {...rest}>
+          {children}
+        </View>
+      )}
     </ViewportContext.Provider>
   );
 };

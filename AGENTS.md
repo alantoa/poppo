@@ -39,7 +39,10 @@ that preset needs `babel-preset-expo` and `expo` at the package root, which
 this library does not otherwise depend on. It is plain `ts-jest` in a node
 environment instead, and the test mocks `react-native` hollow — enough for the
 toast manager, which is pure JS. Anything that renders a component will need
-the real preset (and those dependencies) first.
+the real preset (and those dependencies) first. `expo-modules-core` is mocked
+too, and has to be: it publishes untranspiled TypeScript and jest transforms
+nothing under `node_modules`, so merely not using it stops being enough once
+anything in the import graph reaches it.
 
 `yarn build` compiles without cleaning, so files deleted from `src/` linger in
 `build/`. That does not reach npm — `prepublishOnly` runs `expo-module clean`
@@ -111,6 +114,46 @@ content dismisses it.
 cannot express a 14×8 triangle. Android disables it and draws bubble, corners
 and arrow in `TooltipRootViewGroup`, positioning the arrow after the window is
 up — that is the only moment Balloon's edge clamping is knowable.
+
+## The toast viewport's window overlay
+
+`<Toast.Viewport presentation="window" />` is iOS-only, and exists for one
+reason: React Native's `Modal` presents a view controller, so UIKit adds its
+transition view to the same window and an inline viewport ends up underneath.
+
+`ToastOverlayView` handles it the way `RCTModalHostView` handles a modal's own
+content, and the way `UniversalTooltipView` already handles a popup: the React
+children are moved out into a container added straight to the window, with one
+`RCTSurfaceTouchHandler` attached to that container so touches still reach JS.
+Two details are load-bearing:
+
+- **The overlay is attached late, and re-attached on every new toast.**
+  `addSubview` appends, so the last view added is frontmost. That is the entire
+  mechanism by which a toast beats an already-open modal — no higher
+  `windowLevel` is involved. The known gap: a modal presented *while* a toast
+  is showing covers it until the next toast raises the overlay again. Closing
+  that gap properly means a dedicated `UIWindow` above `.alert`.
+- **The slot is given the window's size from JS.** The host view is 0×0 — its
+  children live elsewhere and it must not disturb the layout around it — and
+  Yoga measures an absolute child inside its containing block, so a slot left to
+  inherit would collapse. `useWindowDimensions()` feeds it, which also
+  re-renders on rotation.
+
+The container hit-tests its subviews directly instead of calling `super`, so a
+toast mid-swipe past the container edge stays pressable while misses fall
+through to the app. The slot must keep `pointerEvents: "box-none"`, or a
+full-window transparent view eats every touch on the screen.
+
+`ToastOverlayView` is registered as a **second** `View` in
+`UniversalTooltipModule` and must stay after the first: expo-modules-core makes
+`viewDefinitions.first` the module's default view, which is what
+`requireNativeViewManager("UniversalTooltip")` resolves to. This one is
+addressed by `ViewName("ToastOverlay")`.
+
+Android has no permission-free equivalent — its `Modal` is a `Dialog` with its
+own window, so being above it means attaching to whichever window is topmost and
+following it as modals open and close. The viewport stays inline there, and
+`presentation="window"` warns once in `__DEV__`.
 
 ## Verifying a change
 

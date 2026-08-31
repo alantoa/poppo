@@ -1,7 +1,14 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useRef, useState } from "react";
-import { Pressable, ScrollView, Text, useColorScheme, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  useColorScheme,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Popover,
@@ -14,6 +21,7 @@ import type {
   ToastObject,
   ToastOverflow,
   ToastViewportPosition,
+  ToastViewportPresentation,
 } from "poppo";
 
 import { isMobileWeb } from "./platform";
@@ -40,6 +48,14 @@ const SIDES: { value: Side; label: string }[] = [
   { value: "bottom", label: "Bottom" },
   { value: "left", label: "Left" },
   { value: "right", label: "Right" },
+];
+
+const PRESENTATIONS: {
+  value: ToastViewportPresentation;
+  label: string;
+}[] = [
+  { value: "inline", label: "Inline" },
+  { value: "window", label: "Window" },
 ];
 
 const OVERFLOWS: { value: ToastOverflow; label: string }[] = [
@@ -222,6 +238,74 @@ const ConfirmPopover = () => {
   );
 };
 
+/**
+ * The reason `presentation="window"` exists. A React Native `Modal` presents a
+ * view controller of its own, so an inline viewport is painted underneath it;
+ * a window overlay is not.
+ */
+const ModalToast = () => {
+  const theme = useTheme();
+  const toast = useToastManager();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        testID="demo-toast-modal-open"
+        label="Open"
+        onPress={() => setOpen(true)}
+      />
+      <Modal
+        visible={open}
+        animationType="slide"
+        onRequestClose={() => setOpen(false)}
+        transparent
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: theme.canvas,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 16,
+            padding: 24,
+          }}
+        >
+          <Text style={{ color: theme.ink, fontSize: 17, fontWeight: "500" }}>
+            Inside a Modal
+          </Text>
+          <Text
+            style={{
+              color: theme.body,
+              fontSize: 13,
+              lineHeight: 19,
+              textAlign: "center",
+            }}
+          >
+            With presentation=&quot;window&quot; the toast shows on top of this
+            screen. With &quot;inline&quot; it is raised behind it.
+          </Text>
+          <Button
+            testID="demo-toast-modal-raise"
+            label="Show toast"
+            onPress={() =>
+              toast.add({
+                id: "in-modal",
+                title: "Raised from a Modal",
+                description: "Above it, if the viewport owns a window",
+              })
+            }
+          />
+          <Button
+            testID="demo-toast-modal-close"
+            label="Close"
+            onPress={() => setOpen(false)}
+          />
+        </View>
+      </Modal>
+    </>
+  );
+};
+
 const DemoToast = ({ toast }: { toast: ToastObject }) => {
   const theme = useTheme();
   const data = (toast.data ?? {}) as {
@@ -311,11 +395,21 @@ const DemoToast = ({ toast }: { toast: ToastObject }) => {
   );
 };
 
-const ToastViewport = ({ position }: { position: ToastViewportPosition }) => {
+const ToastViewport = ({
+  position,
+  presentation,
+}: {
+  position: ToastViewportPosition;
+  presentation: ToastViewportPresentation;
+}) => {
   const { toasts } = useToastManager();
   const insets = useSafeAreaInsets();
   return (
-    <Toast.Viewport position={position} insets={insets}>
+    <Toast.Viewport
+      position={position}
+      presentation={presentation}
+      insets={insets}
+    >
       {toasts.map((toast) => (
         <DemoToast key={toast.id} toast={toast} />
       ))}
@@ -328,11 +422,15 @@ const Gallery = ({
   setPosition,
   overflow,
   setOverflow,
+  presentation,
+  setPresentation,
 }: {
   position: ToastViewportPosition;
   setPosition: (next: ToastViewportPosition) => void;
   overflow: ToastOverflow;
   setOverflow: (next: ToastOverflow) => void;
+  presentation: ToastViewportPresentation;
+  setPresentation: (next: ToastViewportPresentation) => void;
 }) => {
   const toast = useToastManager();
   const burst = useRef(0);
@@ -449,6 +547,16 @@ const Gallery = ({
             onChange={setOverflow}
           />
         </Row>
+        <Row label="From a Modal" subtitle="Needs presentation=&quot;window&quot;">
+          <ModalToast />
+        </Row>
+        <Row label="Presentation" subtitle="iOS only; window beats Modal" stack>
+          <Segmented
+            options={PRESENTATIONS}
+            value={presentation}
+            onChange={setPresentation}
+          />
+        </Row>
         <Row label="Position" stack>
           <Segmented
             options={POSITIONS}
@@ -477,6 +585,8 @@ const Shell = ({
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [position, setPosition] = useState<ToastViewportPosition>("bottom");
+  const [presentation, setPresentation] =
+    useState<ToastViewportPresentation>("window");
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.canvas }}>
@@ -508,9 +618,11 @@ const Shell = ({
           setPosition={setPosition}
           overflow={overflow}
           setOverflow={setOverflow}
+          presentation={presentation}
+          setPresentation={setPresentation}
         />
       </ScrollView>
-      <ToastViewport position={position} />
+      <ToastViewport position={position} presentation={presentation} />
     </View>
   );
 };

@@ -2190,7 +2190,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - UniversalTooltip (1.1.0):
+  - UniversalTooltip (2.0.0):
     - ExpoModulesCore
   - Yoga (0.0.0)
 
@@ -2579,7 +2579,7 @@ SPEC CHECKSUMS:
   RNReanimated: fcf6a8cdd698fb09a811a8d6c5bcfe36575d965d
   RNScreens: 7118cd7715c226856125b5bece3c4d9abec90356
   RNWorklets: 43af89f696342f91118a2f1f3a879056e2f47331
-  UniversalTooltip: 1cc399dc4279e5419a5eadf29bd870a36d1a3760
+  UniversalTooltip: 71dac601d6e0654d52434b8362087c6bca308d95
   Yoga: 9891cfb1c680f64de9c41b09e7453dea33454d2b
 
 PODFILE CHECKSUM: 1f76493ffffc2b2371e3bfe53eaebd39c7de3bea

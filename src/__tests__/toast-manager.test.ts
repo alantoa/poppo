@@ -4,9 +4,16 @@ import { createToastManager } from "../toast";
 // exercised with fake timers. `Date.now` is faked too — the pause bookkeeping
 // reads it to work out how much of a countdown is left.
 //
-// `toast.tsx` also holds the components, which pull in react-native. None of
-// that runs at module scope, so a hollow mock keeps the suite off the full
-// jest-expo preset and the dependency chain it drags in.
+// `toast.tsx` also holds the components, which pull in react-native and (for
+// the iOS window overlay) expo-modules-core. None of that runs at module scope
+// beyond one `Platform.OS` read, so hollow mocks keep the suite off the full
+// jest-expo preset and the dependency chain it drags in. expo-modules-core
+// ships untranspiled TypeScript, so it has to be mocked rather than merely
+// unused: jest will not transform anything under node_modules.
+jest.mock("expo-modules-core", () => ({
+  requireNativeViewManager: () => () => null,
+}));
+
 jest.mock("react-native", () => ({
   Animated: {},
   AppState: {},

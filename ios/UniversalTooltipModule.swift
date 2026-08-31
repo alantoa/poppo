@@ -74,5 +74,17 @@ public class UniversalTooltipModule: Module {
         view.bubbleBackgroundColor = bubbleColor ?? .clear
       }
     }
+
+    // Must stay *after* the view above: expo-modules-core makes the first
+    // `View` in a definition the module's default one, and that is what
+    // `requireNativeViewManager("UniversalTooltip")` resolves to. This one is
+    // addressed by name instead.
+    View(ToastOverlayView.self) {
+      ViewName("ToastOverlay")
+
+      Prop("toastCount") { (view: ToastOverlayView, toastCount: Int?) in
+        view.toastCount = toastCount ?? 0
+      }
+    }
   }
 }

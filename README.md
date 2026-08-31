@@ -38,6 +38,8 @@ presentation, scheduling and the platform differences underneath.
 - **A toast manager built for phones.** Visible limit with a `queue` or
   `replace` overflow policy, one-toast-per-id de-duplication, and countdowns
   that pause while the toast is under a finger or the app is in the background.
+  On iOS the viewport can own a window, so a toast raised from inside a `Modal`
+  shows *above* it instead of behind it.
 
 ## Install
 
@@ -198,7 +200,7 @@ development `Root` warns if it cannot find a `Popup`.
 
 ```text
 <Toast.Provider>           the manager: timeout, limit, overflow
-  <Toast.Viewport>         where toasts stack; position and insets
+  <Toast.Viewport>         where toasts stack; position, insets, presentation
     <Toast.Root>           one toast: animation, swipe, pause-on-touch
       <Toast.Title />
       <Toast.Description />
@@ -315,7 +317,7 @@ outside React or in tests:
 
 | Part                                | Notes                                                                                                                                                                                        |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Toast.Viewport`                    | Where the toasts stack. `position`, `insets`, `style`. See [Placing the viewport](#placing-the-viewport).                                                                                    |
+| `Toast.Viewport`                    | Where the toasts stack. `position`, `insets`, `presentation`, `style`. See [Placing the viewport](#placing-the-viewport).                                                                                    |
 | `Toast.Root`                        | One toast; takes the `toast` object. `presetAnimation` (`"slide" \| "fade" \| "zoom" \| "none"`, default `"slide"`), `animationDuration` (default `220`), `swipeToDismiss` (default `true`). |
 | `Toast.Title` / `Toast.Description` | `Text`s that fall back to the toast's own `title` / `description` when given no children. `Description` renders nothing when there is none.                                                  |
 | `Toast.Action` / `Toast.Close`      | `Pressable`s that close the toast, then call your `onPress`.                                                                                                                                 |
@@ -363,6 +365,33 @@ library's call. Pass what you already have:
 shape as `useSafeAreaInsets()`. Without it, a bottom toast sits under the home
 indicator on a modern iPhone. `style` still overrides everything if you want to
 lay it out yourself.
+
+### Showing toasts above a Modal
+
+An inline viewport is a view in your tree, so React Native's `Modal` covers it —
+`Modal` presents a view controller of its own. `presentation="window"` moves the
+viewport into an overlay on the window itself, which a modal does not cover.
+
+```tsx
+<Toast.Viewport position="bottom" presentation="window" insets={insets} />
+```
+
+| `presentation` | Behaviour |
+| --- | --- |
+| `"inline"` (default) | An absolutely positioned view in the React tree, bounded by its parent — like any other view. |
+| `"window"` | **iOS only.** An overlay on the window: not clipped by an ancestor, and raised above an open `Modal`. Falls back to `"inline"` on Android and web, with a warning in development. |
+
+Two things to know before switching:
+
+- **`position` starts measuring from the screen.** The overlay *is* the window,
+  so a viewport that used to be bounded by a screen sitting above a tab bar is
+  now bounded by the display. Your `insets` are what keep it clear.
+- **A modal presented while a toast is already up still covers that toast.** The
+  overlay wins by being added to the window last, so it is raised when a toast
+  arrives rather than held on top continuously. The next toast raises it again.
+
+Android keeps the viewport inline: its `Modal` is a `Dialog` with a window of
+its own, and getting above that has no permission-free equivalent.
 
 ## Styling
 
