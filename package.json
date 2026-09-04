@@ -1,6 +1,6 @@
 {
   "name": "poppo",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Tooltip, popover and toast for Expo and React Native — native popups on iOS and Android, Base UI on web.",
   "main": "build/index.js",
   "types": "build/index.d.ts",
