@@ -301,6 +301,10 @@ export type ToastViewportProps = ViewProps & {
    */
   presentation?: ToastViewportPresentation;
   /**
+   * **Experimental.** Off by default, and unverified: on Android a tap has
+   * been seen to clear the stack rather than open it. Drive `expanded`
+   * yourself if you need this today.
+   *
    * Let a tap open the stack out into a list, so the toasts behind the front
    * one can be read and dismissed. What opens out is the stack as drawn —
    * `maxVisible` toasts — not every toast the manager is holding.

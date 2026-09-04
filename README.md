@@ -360,6 +360,10 @@ still fading rather than after it is gone.
 
 ### Opening the stack
 
+> **Experimental.** Verified on neither platform yet, and on Android a tap has
+> been seen to clear the stack rather than open it. It is off by default; treat
+> it as iOS-first and drive `expanded` yourself if you need this today.
+
 `expandable` on the viewport lets a tap spread the stack out into a list, so
 the toasts behind the front one can be read and dismissed. What opens out is
 the stack **as drawn** — the `maxVisible` toasts — not every toast the manager

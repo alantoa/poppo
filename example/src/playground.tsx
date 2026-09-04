@@ -407,6 +407,8 @@ const ToastViewport = ({
       position={position}
       presentation={presentation}
       insets={insets}
+      // Experimental, and this is the place to try it: these toasts have their
+      // own buttons, so a tap reaches both.
       expandable
     >
       {toasts.map((toast) => (

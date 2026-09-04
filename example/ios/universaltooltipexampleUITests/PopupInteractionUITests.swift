@@ -210,7 +210,9 @@ final class PopupInteractionUITests: XCTestCase {
 
   /// The default `overflow: "queue"`: a second toast waits for the first
   /// (3 s in the example) and then gets its own full timeout.
-  func testQueueOverflowHoldsTheSecondToast() {
+  /// Nothing is held back by default: a burst stacks, rather than queueing one
+  /// toast behind another.
+  func testBurstStacksRatherThanQueues() {
     let button = trigger("demo-toast-burst")
     scrollTo(button)
     button.tap()
@@ -218,15 +220,11 @@ final class PopupInteractionUITests: XCTestCase {
 
     let first = app.staticTexts["Message 1"]
     let second = app.staticTexts["Message 2"]
-    XCTAssertTrue(first.waitForExistence(timeout: uiTimeout))
-    Thread.sleep(forTimeInterval: 1)
-    XCTAssertFalse(second.exists, "The queued toast showed before its turn.")
-
     XCTAssertTrue(
-      second.waitForExistence(timeout: uiTimeout),
-      "The queued toast never got promoted."
+      second.waitForExistence(timeout: 2),
+      "The second toast waited its turn instead of stacking."
     )
-    waitToVanish(first, timeout: uiTimeout)
+    XCTAssertTrue(first.exists, "The first toast left when the second landed.")
   }
 
   /// `overflow: "replace"`: the newest toast shows at once and the one it
@@ -250,13 +248,10 @@ final class PopupInteractionUITests: XCTestCase {
     XCTAssertTrue(second.exists)
   }
 
-  /// A burst of distinct ids in replace mode must leave only the newest
-  /// toast on screen — not a stack, and not a blank hole after the exits.
-  func testReplaceBurstLeavesOnlyTheNewest() {
-    let replace = trigger("segment-replace")
-    scrollTo(replace)
-    replace.tap()
-
+  /// A toast that a newer one pushes back has its countdown capped at
+  /// `demotedTimeout` (2 s in the example), so the back of the stack clears
+  /// while the newest toast is still fresh.
+  func testStackDrainsFromTheBack() {
     let button = trigger("demo-toast-burst")
     scrollTo(button)
     button.tap()
@@ -266,18 +261,20 @@ final class PopupInteractionUITests: XCTestCase {
     let newest = app.staticTexts["Message 3"]
     XCTAssertTrue(
       newest.waitForExistence(timeout: 2),
-      "The last toast in a replace burst never appeared."
+      "The last toast of the burst never appeared."
     )
-    Thread.sleep(forTimeInterval: 0.6)
-    XCTAssertFalse(
+    XCTAssertTrue(
       app.staticTexts["Message 1"].exists,
-      "An earlier toast was still up after its replace exit."
+      "The burst did not stack — the first toast was already gone."
     )
+
+    // Both older toasts were demoted to 2 s; the newest keeps its own 3 s.
+    waitToVanish(app.staticTexts["Message 1"], timeout: uiTimeout)
     XCTAssertFalse(
       app.staticTexts["Message 2"].exists,
-      "The middle toast was still up after its replace exit."
+      "The middle toast outlived its demoted countdown."
     )
-    XCTAssertTrue(newest.exists)
+    XCTAssertTrue(newest.exists, "The newest toast left with the older ones.")
   }
 
   /// `presentation="window"` exists so a toast raised from a React Native
@@ -307,7 +304,11 @@ final class PopupInteractionUITests: XCTestCase {
 
   /// The same toast with an inline viewport is painted in the React tree,
   /// underneath the Modal's view controller.
-  func testInlineToastIsCoveredByModal() {
+  /// The other way to get in front of a `Modal`, and the only one Android has:
+  /// a second viewport inside the modal takes over while it is open. This runs
+  /// on the inline path, so nothing owns a window and the handover is the only
+  /// thing putting the toast in front.
+  func testModalViewportPutsTheToastInFrontOnTheInlinePath() {
     let inline = trigger("segment-inline")
     scrollTo(inline)
     inline.tap()
@@ -321,15 +322,16 @@ final class PopupInteractionUITests: XCTestCase {
     )
 
     trigger("demo-toast-modal-raise").tap()
-    Thread.sleep(forTimeInterval: 0.8)
 
-    let toast = app.staticTexts["Raised from a Modal"]
-    if toast.exists {
-      XCTAssertFalse(
-        toast.firstMatch.isHittable,
-        "An inline toast should sit behind the Modal."
-      )
-    }
+    let toast = app.staticTexts["Raised from a Modal"].firstMatch
+    XCTAssertTrue(
+      toast.waitForExistence(timeout: uiTimeout),
+      "The modal's own viewport never drew the toast."
+    )
+    XCTAssertTrue(
+      toast.isHittable,
+      "The toast is in the tree but still behind the Modal."
+    )
   }
 
   func testPopupSurvivesRepeatedOpenAndClose() {

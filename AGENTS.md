@@ -177,6 +177,12 @@ Consequences worth knowing before changing any of it:
 
 ## Opening the stack
 
+**Unverified as shipped.** On Android a tap was seen to clear the stack instead
+of opening it, and the cause was never found; on iOS the scaffolding for a
+visual check never landed a tap on the right button. The prop is off by default
+and marked experimental in the README for that reason — do not treat the
+described behaviour below as observed.
+
 `expandable` puts a `Gesture.Tap` on each Root, composed as
 `Gesture.Exclusive(pan, tap)` so a drag never doubles as a tap. It is enabled
 only while more than one toast is up — a lone toast with a button in it should
