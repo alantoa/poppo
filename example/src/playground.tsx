@@ -10,12 +10,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import {
-  Popover,
-  Toast,
-  Tooltip,
-  useToastManager,
-} from "poppo";
+import { Popover, Toast, Tooltip, useToastManager } from "poppo";
 import type {
   Side,
   ToastObject,
@@ -102,7 +97,11 @@ const RichTooltip = () => {
   const theme = useTheme();
   return (
     <Hint.Root>
-      <Hint.Trigger delay={150} testID="demo-tooltip-rich" accessibilityLabel="Show rich tooltip">
+      <Hint.Trigger
+        delay={150}
+        testID="demo-tooltip-rich"
+        accessibilityLabel="Show rich tooltip"
+      >
         <TriggerChip label="Show" />
       </Hint.Trigger>
       <Hint.Portal>
@@ -138,11 +137,7 @@ const RichTooltip = () => {
                 </Text>
               </View>
             </View>
-            <Hint.Arrow
-              width={14}
-              height={8}
-              backgroundColor={theme.bubble}
-            />
+            <Hint.Arrow width={14} height={8} backgroundColor={theme.bubble} />
           </Hint.Popup>
         </Hint.Positioner>
       </Hint.Portal>
@@ -156,7 +151,10 @@ const ConfirmPopover = () => {
   const [removePressed, setRemovePressed] = useState(false);
   return (
     <Popover.Root>
-      <Popover.Trigger testID="demo-popover-confirm" accessibilityLabel="Open confirm popover">
+      <Popover.Trigger
+        testID="demo-popover-confirm"
+        accessibilityLabel="Open confirm popover"
+      >
         <TriggerChip label="Open" />
       </Popover.Trigger>
       <Popover.Portal>
@@ -301,6 +299,10 @@ const ModalToast = () => {
             onPress={() => setOpen(false)}
           />
         </View>
+        {/* On Android a Modal is a Dialog with a window of its own, so the
+            viewport at the root of the app cannot be drawn over it. A second
+            viewport in here takes over while the modal is open. */}
+        <ToastViewport position="bottom" presentation="inline" />
       </Modal>
     </>
   );
@@ -332,11 +334,7 @@ const DemoToast = ({ toast }: { toast: ToastObject }) => {
         paddingVertical: 14,
       }}
     >
-      <Ionicons
-        name="checkmark-circle"
-        size={18}
-        color={theme.success}
-      />
+      <Ionicons name="checkmark-circle" size={18} color={theme.success} />
       <View style={{ flexShrink: 1, gap: 2 }}>
         <Toast.Title
           style={{
@@ -409,6 +407,7 @@ const ToastViewport = ({
       position={position}
       presentation={presentation}
       insets={insets}
+      expandable
     >
       {toasts.map((toast) => (
         <DemoToast key={toast.id} toast={toast} />
@@ -480,7 +479,7 @@ const Gallery = ({
       <Section
         index="03"
         title="Toast"
-        hint="Same id refreshes. New ids queue or replace. Holding pauses."
+        hint="Same id refreshes. Tap a stack to open it. Holding pauses."
       >
         <Row label="Title">
           <Button
@@ -530,6 +529,25 @@ const Gallery = ({
             }
           />
         </Row>
+        <Row label="Deep stack" subtitle="One press, five sticky toasts">
+          <Button
+            testID="demo-toast-stack"
+            label="Show"
+            onPress={() => {
+              // timeout 0 keeps them up: a demoted toast is only shortened if
+              // it had a countdown at all, so the stack stays for inspection.
+              for (let i = 1; i <= 5; i += 1) {
+                toast.add({
+                  id: `stacked-${i}`,
+                  title: `Stacked ${i}`,
+                  description: i === 5 ? "Newest, in front" : undefined,
+                  timeout: 0,
+                  data: { dismissible: true },
+                });
+              }
+            }}
+          />
+        </Row>
         <Row label="New id each tap" subtitle={`overflow: "${overflow}"`}>
           <Button
             testID="demo-toast-burst"
@@ -547,7 +565,7 @@ const Gallery = ({
             onChange={setOverflow}
           />
         </Row>
-        <Row label="From a Modal" subtitle="Needs presentation=&quot;window&quot;">
+        <Row label="From a Modal" subtitle='Needs presentation="window"'>
           <ModalToast />
         </Row>
         <Row label="Presentation" subtitle="iOS only; window beats Modal" stack>
@@ -605,9 +623,7 @@ const Shell = ({
           <View style={{ gap: 8 }}>
             <Eyebrow>example</Eyebrow>
             <Display>Playground</Display>
-            <Body>
-              Tooltip, popover, and toast — one API, every platform.
-            </Body>
+            <Body>Tooltip, popover, and toast — one API, every platform.</Body>
           </View>
           {showSwitcher && onThemeChange ? (
             <ThemeSwitch value={themeName} onChange={onThemeChange} />

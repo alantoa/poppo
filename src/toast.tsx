@@ -1,15 +1,15 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import {
-  Animated,
   AppState,
-  PanResponder,
   Platform,
   Pressable,
   Text as RNText,
@@ -20,282 +20,34 @@ import {
   type ViewProps,
   type ViewStyle,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  Easing,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 
 import {
   supportsWindowPresentation,
   ToastOverlayHost,
 } from "./primitives/toast-overlay";
-import type { ToastAddOptions, ToastManager, ToastObject } from "./types";
+import {
+  createToastManager,
+  stackDepthOf,
+  stackOffsetOf,
+  stackSlotOf,
+} from "./toast-manager";
+import type { ToastOverflow } from "./toast-manager";
+import type { ToastManager, ToastObject } from "./types";
+
+export { createToastManager };
+export type { ToastManagerOptions, ToastOverflow } from "./toast-manager";
 
 // ---------------------------------------------------------------------------
-// Manager — a small external store with queue scheduling, mirroring Base UI's
-// Toast.createToastManager():
-//
-// - At most `limit` toasts are visible at once (default 1). What happens to
-//   the next one is `overflow`: "queue" (default) holds it until a slot frees
-//   up; "replace" closes the oldest visible toast so the new one shows at
-//   once — the Android Snackbar convention, and usually what a phone wants.
-// - `add` with an existing `id` UPDATES that toast and restarts its timer —
-//   pressing the same button repeatedly refreshes one toast instead of
-//   stacking duplicates.
-// - `close` marks the toast as "closing" so the exit animation can play;
-//   `finalize` (called by Toast.Root when the animation ends, with a safety
-//   fallback timer) removes it and promotes the next queued toast.
-// - Auto-dismiss timers only run while a toast is visible — queued toasts
-//   get their full timeout once shown. A timer can be paused: `Toast.Root`
-//   holds it while the toast is being touched, dragged or hovered, and
-//   `Toast.Provider` suspends all of them while the app is in the background,
-//   so a toast never expires under a finger or while nobody can see it.
-
-let idCounter = 0;
-
-// Safety net: if no Toast.Root is rendered for a closing toast (so nothing
-// calls finalize), remove it anyway after the exit animation should have
-// long finished.
-const FINALIZE_FALLBACK_MS = 600;
-
-export type ToastOverflow = "queue" | "replace";
-
-export type ToastManagerOptions = {
-  /**
-   * Default auto-dismiss timeout in milliseconds. 0 disables auto-dismiss.
-   * @default 5000
-   */
-  timeout?: number;
-  /**
-   * Maximum number of toasts visible at once.
-   * @default 1
-   */
-  limit?: number;
-  /**
-   * What happens to a new toast when `limit` is reached: `"queue"` shows it
-   * once a visible toast goes away; `"replace"` closes the oldest visible
-   * toast so the new one shows immediately.
-   * @default "queue"
-   */
-  overflow?: ToastOverflow;
-};
-
-/** A running or paused auto-dismiss countdown. */
-type Countdown = {
-  handle: ReturnType<typeof setTimeout> | null;
-  /** Milliseconds left the last time the countdown was (re)started or paused. */
-  remaining: number;
-  /** When `handle` was scheduled; meaningless while paused. */
-  startedAt: number;
-};
-
-export const createToastManager = (
-  defaults?: ToastManagerOptions,
-): ToastManager => {
-  const defaultTimeout = defaults?.timeout ?? 5000;
-  const limit = Math.max(1, defaults?.limit ?? 1);
-  const overflow: ToastOverflow = defaults?.overflow ?? "queue";
-
-  let visible: ToastObject[] = [];
-  let queue: ToastObject[] = [];
-  const listeners = new Set<() => void>();
-  const countdowns = new Map<string, Countdown>();
-  const fallbacks = new Map<string, ReturnType<typeof setTimeout>>();
-  /** Toasts whose countdown is held by an interaction (`pause`). */
-  const held = new Set<string>();
-  /** Every countdown is held (`pauseAll`) — the app is in the background. */
-  let suspended = false;
-
-  const notify = () => listeners.forEach((listener) => listener());
-
-  // Schedules the countdown unless something is holding it. Idempotent.
-  const run = (id: string) => {
-    const countdown = countdowns.get(id);
-    if (!countdown || countdown.handle || held.has(id) || suspended) return;
-    countdown.startedAt = Date.now();
-    countdown.handle = setTimeout(() => {
-      countdowns.delete(id);
-      close(id);
-    }, countdown.remaining);
-  };
-
-  // Unschedules the countdown, remembering how much was left. Idempotent.
-  const halt = (id: string) => {
-    const countdown = countdowns.get(id);
-    if (!countdown?.handle) return;
-    clearTimeout(countdown.handle);
-    countdown.handle = null;
-    countdown.remaining = Math.max(
-      0,
-      countdown.remaining - (Date.now() - countdown.startedAt),
-    );
-  };
-
-  const stopTimer = (id: string) => {
-    halt(id);
-    countdowns.delete(id);
-  };
-
-  const startTimer = (toast: ToastObject) => {
-    stopTimer(toast.id);
-    const dismissAfter = toast.timeout ?? defaultTimeout;
-    if (dismissAfter > 0) {
-      countdowns.set(toast.id, {
-        handle: null,
-        remaining: dismissAfter,
-        startedAt: 0,
-      });
-      run(toast.id);
-    }
-  };
-
-  const clearFallback = (id: string) => {
-    const fallback = fallbacks.get(id);
-    if (fallback) {
-      clearTimeout(fallback);
-      fallbacks.delete(id);
-    }
-  };
-
-  const openToasts = () => visible.filter((toast) => toast.state !== "closing");
-
-  const promote = () => {
-    while (queue.length > 0 && openToasts().length < limit) {
-      const next = queue[0] as ToastObject;
-      queue = queue.slice(1);
-      visible = [{ ...next, state: "open" }, ...visible];
-      startTimer(next);
-    }
-  };
-
-  const close = (id: string) => {
-    stopTimer(id);
-    // Still queued — drop silently.
-    const queuedIndex = queue.findIndex((toast) => toast.id === id);
-    if (queuedIndex !== -1) {
-      queue = queue.filter((toast) => toast.id !== id);
-      return;
-    }
-    const target = visible.find((toast) => toast.id === id);
-    if (!target || target.state === "closing") return;
-    visible = visible.map((toast) =>
-      toast.id === id ? { ...toast, state: "closing" as const } : toast,
-    );
-    // Promote the next queued toast right away — the closing toast is only
-    // animating out and no longer occupies a logical slot.
-    promote();
-    notify();
-    // Safety net in case no Toast.Root finalizes this toast.
-    clearFallback(id);
-    fallbacks.set(
-      id,
-      setTimeout(() => finalize(id), FINALIZE_FALLBACK_MS),
-    );
-  };
-
-  const finalize = (id: string) => {
-    stopTimer(id);
-    clearFallback(id);
-    held.delete(id);
-    const next = visible.filter((toast) => toast.id !== id);
-    const changed = next.length !== visible.length;
-    visible = next;
-    promote();
-    if (changed) notify();
-  };
-
-  const add = (options: ToastAddOptions) => {
-    const id = options.id ?? `toast-${++idCounter}`;
-
-    // Same id — update in place and restart the timer instead of stacking.
-    // Closing entries count: one that is still playing its exit animation is
-    // brought back rather than duplicated. Appending instead would leave two
-    // entries sharing an id, and `finalize` filters by id, so the old one
-    // finishing its animation would take the new one with it.
-    const visibleExisting = visible.find((toast) => toast.id === id);
-    if (visibleExisting) {
-      clearFallback(id);
-      visible = visible.map((toast) =>
-        toast.id === id
-          ? { ...toast, ...options, id, state: "open" as const }
-          : toast,
-      );
-      startTimer({ ...visibleExisting, ...options, id });
-      notify();
-      return id;
-    }
-    const queuedExisting = queue.find((toast) => toast.id === id);
-    if (queuedExisting) {
-      queue = queue.map((toast) =>
-        toast.id === id ? { ...toast, ...options, id } : toast,
-      );
-      notify();
-      return id;
-    }
-
-    const toast: ToastObject = { ...options, id, state: "open" };
-    const open = openToasts();
-    if (open.length >= limit) {
-      if (overflow === "queue") {
-        queue = [...queue, toast];
-        notify();
-        return id;
-      }
-      // "replace": the oldest open toast makes room. `visible` is newest
-      // first, so that is the last open entry.
-      close((open[open.length - 1] as ToastObject).id);
-    }
-    visible = [toast, ...visible];
-    startTimer(toast);
-    notify();
-    return id;
-  };
-
-  const update = (id: string, options: Partial<ToastAddOptions>) => {
-    visible = visible.map((toast) =>
-      toast.id === id ? { ...toast, ...options, id } : toast,
-    );
-    queue = queue.map((toast) =>
-      toast.id === id ? { ...toast, ...options, id } : toast,
-    );
-    notify();
-  };
-
-  const pause = (id: string) => {
-    held.add(id);
-    halt(id);
-  };
-
-  const resume = (id: string) => {
-    held.delete(id);
-    run(id);
-  };
-
-  const pauseAll = () => {
-    suspended = true;
-    countdowns.forEach((_, id) => halt(id));
-  };
-
-  const resumeAll = () => {
-    suspended = false;
-    countdowns.forEach((_, id) => run(id));
-  };
-
-  return {
-    add,
-    close,
-    finalize,
-    update,
-    pause,
-    resume,
-    pauseAll,
-    resumeAll,
-    getToasts: () => visible,
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Components
+// Contexts
 
 type ToastContextValue = {
   manager: ToastManager;
@@ -305,12 +57,91 @@ type ToastContextValue = {
 const ToastContext = createContext<ToastContextValue | null>(null);
 const ToastItemContext = createContext<ToastObject | null>(null);
 
+/**
+ * Which viewport is allowed to draw the toasts.
+ *
+ * More than one can be mounted — and on Android that is the only way to get a
+ * toast in front of a `Modal`, whose content lives in a `Dialog` with a window
+ * of its own that nothing in the activity's tree can be drawn over. So a
+ * viewport inside the modal takes over while it is open, and the one at the
+ * root of the app takes back over when it closes.
+ *
+ * The most recently mounted one wins, *except* that a viewport which owns a
+ * window of its own outranks every inline one however late they arrive: it is
+ * already above any modal, so handing over to one inside a modal would gain
+ * nothing and cost a remount — the toasts would replay their entrance on the
+ * way in and again on the way out. That is what keeps the same JSX correct on
+ * both platforms: a viewport inside a modal is what Android needs and a no-op
+ * on iOS.
+ */
+type ToastViewportRegistry = {
+  claim: (token: object, ownsWindow: boolean) => () => void;
+  topmost: object | null;
+};
+
+const ViewportRegistryContext = createContext<ToastViewportRegistry>({
+  claim: () => () => {},
+  topmost: null,
+});
+
 export type ToastViewportPosition =
   "top" | "bottom" | "top-start" | "top-end" | "bottom-start" | "bottom-end";
 
-const ViewportContext = createContext<{ position: ToastViewportPosition }>({
+export type ToastViewportPresentation = "inline" | "window";
+
+/**
+ * Everything a `Toast.Root` needs to place itself. The viewport resolves it
+ * once so each toast can anchor itself against the same edge: the toasts are
+ * absolutely positioned and overlap, rather than sharing a flex column, so a
+ * toast finishing its exit animation never shifts the ones that remain.
+ */
+type ToastViewportGeometry = {
+  position: ToastViewportPosition;
+  towardsTop: boolean;
+  alignItems: "flex-start" | "center" | "flex-end";
+  /** Distance from the edge the stack is anchored to. */
+  edgeMain: number;
+  edgeLeft: number;
+  edgeRight: number;
+  /** Whether a tap on the stack opens it out. */
+  expandable: boolean;
+  /** Whether it is open right now. */
+  expanded: boolean;
+  toggleExpanded: () => void;
+  /** Room between toasts once the stack is open. */
+  expandedGap: number;
+  /**
+   * Measured heights by toast id. Collapsed the toasts overlap and a fixed
+   * peek is enough; expanded they have to clear each other, which only their
+   * real heights know how to do.
+   */
+  heights: Record<string, number>;
+  /** `null` forgets the id — a Root reports that as it unmounts. */
+  reportHeight: (id: string, height: number | null) => void;
+};
+
+/** Space between a toast and the edge it sits against. */
+const VIEWPORT_PADDING = 16;
+
+const noop = () => {};
+
+const ViewportContext = createContext<ToastViewportGeometry>({
   position: "bottom",
+  towardsTop: false,
+  alignItems: "center",
+  edgeMain: VIEWPORT_PADDING,
+  edgeLeft: VIEWPORT_PADDING,
+  edgeRight: VIEWPORT_PADDING,
+  expandable: false,
+  expanded: false,
+  toggleExpanded: noop,
+  expandedGap: 12,
+  heights: {},
+  reportHeight: noop,
 });
+
+// ---------------------------------------------------------------------------
+// Provider
 
 export type ToastProviderProps = {
   children?: React.ReactNode;
@@ -326,7 +157,9 @@ export type ToastProviderProps = {
   timeout?: number;
   /**
    * Maximum number of toasts visible at once (used by the internal manager).
-   * @default 1
+   * They are drawn as a stack, the newest in front; by default nothing is held
+   * back and the stack just keeps growing.
+   * @default Infinity
    */
   limit?: number;
   /**
@@ -336,6 +169,13 @@ export type ToastProviderProps = {
    * @default "queue"
    */
   overflow?: ToastOverflow;
+  /**
+   * Ceiling in ms on how long a toast has left once a newer one pushes it
+   * back in the stack (used by the internal manager). It only shortens, so a
+   * value at or above `timeout` turns it off.
+   * @default 2000
+   */
+  demotedTimeout?: number;
 };
 
 export const Provider = ({
@@ -344,10 +184,16 @@ export const Provider = ({
   timeout,
   limit,
   overflow,
+  demotedTimeout,
 }: ToastProviderProps) => {
   const internal = useRef<ToastManager | null>(null);
   if (!toastManager && internal.current === null) {
-    internal.current = createToastManager({ timeout, limit, overflow });
+    internal.current = createToastManager({
+      timeout,
+      limit,
+      overflow,
+      demotedTimeout,
+    });
   }
   const manager = toastManager ?? internal.current!;
   const toasts = useSyncExternalStore(
@@ -366,9 +212,27 @@ export const Provider = ({
     });
     return () => subscription.remove();
   }, [manager]);
+  const [mounted, setMounted] = useState<
+    { token: object; ownsWindow: boolean }[]
+  >([]);
+  const claim = useCallback((token: object, ownsWindow: boolean) => {
+    setMounted((prev) => [...prev, { token, ownsWindow }]);
+    return () =>
+      setMounted((prev) => prev.filter((entry) => entry.token !== token));
+  }, []);
+  const registry = useMemo<ToastViewportRegistry>(() => {
+    const owning = mounted.filter((entry) => entry.ownsWindow);
+    const pool = owning.length > 0 ? owning : mounted;
+    return { claim, topmost: pool[pool.length - 1]?.token ?? null };
+  }, [claim, mounted]);
+
   const value = useMemo(() => ({ manager, toasts }), [manager, toasts]);
   return (
-    <ToastContext.Provider value={value}>{children}</ToastContext.Provider>
+    <ToastContext.Provider value={value}>
+      <ViewportRegistryContext.Provider value={registry}>
+        {children}
+      </ViewportRegistryContext.Provider>
+    </ToastContext.Provider>
   );
 };
 
@@ -392,6 +256,9 @@ export const useToastManager = () => {
   );
 };
 
+// ---------------------------------------------------------------------------
+// Viewport
+
 export type ToastViewportEdgeInsets = {
   top?: number;
   bottom?: number;
@@ -407,7 +274,8 @@ export type ToastViewportProps = ViewProps & {
    */
   position?: ToastViewportPosition;
   /**
-   * Extra room to leave at each edge, added to the viewport's own padding.
+   * Extra room to leave at each edge, added to the gap the viewport already
+   * keeps.
    *
    * Nothing here knows about safe areas or a tab bar — that is the app's to
    * know, and taking a dependency on it would not be this library's call. Pass
@@ -432,12 +300,31 @@ export type ToastViewportProps = ViewProps & {
    *   on Android and web.
    */
   presentation?: ToastViewportPresentation;
+  /**
+   * Let a tap open the stack out into a list, so the toasts behind the front
+   * one can be read and dismissed. What opens out is the stack as drawn —
+   * `maxVisible` toasts — not every toast the manager is holding.
+   *
+   * The tap is only live while more than one toast is up, and every countdown
+   * is held while the stack is open.
+   *
+   * A tap reaches the toast's own children too, so if yours have buttons in
+   * them, leave this off and drive `expanded` from wherever you want the
+   * trigger to be.
+   * @default false
+   */
+  expandable?: boolean;
+  /** Open state, if you would rather own it. */
+  expanded?: boolean;
+  /** Open state to start from, when you would not. */
+  defaultExpanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  /**
+   * Room left between toasts once the stack is open.
+   * @default 12
+   */
+  expandedGap?: number;
 };
-
-export type ToastViewportPresentation = "inline" | "window";
-
-/** Space between a toast and the edge it sits against. */
-const VIEWPORT_PADDING = 16;
 
 let warnedAboutPresentation = false;
 
@@ -447,9 +334,13 @@ export const Viewport = ({
   insets,
   style,
   presentation = "inline",
+  expandable = false,
+  expanded,
+  defaultExpanded = false,
+  onExpandedChange,
+  expandedGap = 12,
   ...rest
 }: ToastViewportProps) => {
-  const context = useMemo(() => ({ position }), [position]);
   const inWindow = presentation === "window" && supportsWindowPresentation;
   if (
     __DEV__ &&
@@ -463,68 +354,127 @@ export const Viewport = ({
         'falling back to "inline".',
     );
   }
-  // Only the edges actually asked for are written, so a caller overriding
-  // `padding` wholesale through `style` still works when there are no insets.
-  const insetStyle = useMemo(
-    () => ({
-      ...(insets?.top ? { paddingTop: VIEWPORT_PADDING + insets.top } : null),
-      ...(insets?.bottom
-        ? { paddingBottom: VIEWPORT_PADDING + insets.bottom }
-        : null),
-      ...(insets?.left
-        ? { paddingLeft: VIEWPORT_PADDING + insets.left }
-        : null),
-      ...(insets?.right
-        ? { paddingRight: VIEWPORT_PADDING + insets.right }
-        : null),
-    }),
-    [insets?.top, insets?.bottom, insets?.left, insets?.right],
+
+  const registry = useContext(ViewportRegistryContext);
+  const token = useRef({}).current;
+  useEffect(
+    () => registry.claim(token, inWindow),
+    [registry.claim, token, inWindow],
   );
-  const alignItems = position.endsWith("-start")
-    ? ("flex-start" as const)
-    : position.endsWith("-end")
-      ? ("flex-end" as const)
-      : ("center" as const);
-  // The window overlay is already the size of the screen, so the edge the
-  // toasts sit against is a justification inside it rather than a pinned side.
+  // Before any viewport has claimed — the first render of the only one there
+  // is — drawing is the right guess, so a lone viewport never blinks.
+  const showing = registry.topmost === null || registry.topmost === token;
+
+  const count = showing ? React.Children.count(children) : 0;
+
+  const [ownExpanded, setOwnExpanded] = useState(defaultExpanded);
+  const isExpanded = expanded ?? ownExpanded;
+  const setExpanded = useCallback(
+    (next: boolean) => {
+      if (expanded === undefined) setOwnExpanded(next);
+      onExpandedChange?.(next);
+    },
+    [expanded, onExpandedChange],
+  );
+  const toggleExpanded = useCallback(
+    () => setExpanded(!isExpanded),
+    [setExpanded, isExpanded],
+  );
+  // With one toast left there is nothing to open out, so an open stack that
+  // drains down to one closes itself rather than leaving a gap behind.
+  useEffect(() => {
+    if (isExpanded && count <= 1) setExpanded(false);
+  }, [isExpanded, count, setExpanded]);
+
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const reportHeight = useCallback((id: string, height: number | null) => {
+    setHeights((prev) => {
+      if (height === null) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      // Layout fires on every pass; only a real change is worth a render.
+      if (Math.abs((prev[id] ?? -1) - height) < 1) return prev;
+      return { ...prev, [id]: height };
+    });
+  }, []);
+
+  const towardsTop = position.startsWith("top");
+  const geometry = useMemo<ToastViewportGeometry>(
+    () => ({
+      position,
+      towardsTop,
+      alignItems: position.endsWith("-start")
+        ? "flex-start"
+        : position.endsWith("-end")
+          ? "flex-end"
+          : "center",
+      // The spacing lives on each toast rather than as padding on this view:
+      // the toasts are absolutely positioned, and an absolute child's insets
+      // are measured from the padding box, so padding here would not move
+      // them.
+      edgeMain:
+        VIEWPORT_PADDING + ((towardsTop ? insets?.top : insets?.bottom) ?? 0),
+      edgeLeft: VIEWPORT_PADDING + (insets?.left ?? 0),
+      edgeRight: VIEWPORT_PADDING + (insets?.right ?? 0),
+      expandable,
+      expanded: isExpanded,
+      toggleExpanded,
+      expandedGap,
+      heights,
+      reportHeight,
+    }),
+    [
+      position,
+      towardsTop,
+      insets?.top,
+      insets?.bottom,
+      insets?.left,
+      insets?.right,
+      expandable,
+      isExpanded,
+      toggleExpanded,
+      expandedGap,
+      heights,
+      reportHeight,
+    ],
+  );
+
+  // The viewport fills its container instead of hugging the toasts, so that
+  // the box the toasts anchor against never changes size as they come and go.
   // `pointerEvents` stays first so a caller can still override it.
-  const layout = inWindow
-    ? ({
-        pointerEvents: "box-none",
-        justifyContent: position.startsWith("top")
-          ? ("flex-start" as const)
-          : ("flex-end" as const),
-        alignItems,
-        gap: 8,
-        padding: VIEWPORT_PADDING,
-      } as const)
-    : ({
-        pointerEvents: "box-none",
-        position: "absolute",
-        left: 0,
-        right: 0,
-        ...(position.startsWith("top") ? { top: 0 } : { bottom: 0 }),
-        alignItems,
-        gap: 8,
-        padding: VIEWPORT_PADDING,
-        zIndex: 1000,
-      } as const);
-  const viewportStyle = [layout, insetStyle, style];
+  const containerStyle = [
+    inWindow
+      ? ({ pointerEvents: "box-none" } as const)
+      : ({
+          pointerEvents: "box-none",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 1000,
+        } as const),
+    style,
+  ];
+
   return (
-    <ViewportContext.Provider value={context}>
-      {inWindow ? (
+    <ViewportContext.Provider value={geometry}>
+      {!showing ? null : inWindow ? (
         <ToastOverlayHost
           // What the overlay attaches and raises on. Counting the children
           // rather than asking the manager keeps a viewport that renders a
           // subset of the toasts honest.
           toastCount={React.Children.count(children)}
-          style={viewportStyle}
+          style={containerStyle}
           {...rest}
         >
           {children}
         </ToastOverlayHost>
       ) : (
-        <View style={viewportStyle} {...rest}>
+        <View style={containerStyle} {...rest}>
           {children}
         </View>
       )}
@@ -532,221 +482,425 @@ export const Viewport = ({
   );
 };
 
-export type ToastPresetAnimation = "slide" | "fade" | "zoom" | "none";
+// ---------------------------------------------------------------------------
+// Root
+
+export type ToastPresetAnimation =
+  "spring" | "slide" | "fade" | "zoom" | "none";
 
 export type ToastRootProps = ViewProps & {
   toast: ToastObject;
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   /**
-   * Enter/exit animation preset.
-   * @default "slide"
+   * Enter/exit animation preset. `"spring"` rises in from off the edge and
+   * settles with a spring; the others are flatter variants of the same
+   * machinery.
+   * @default "spring"
    */
   presetAnimation?: ToastPresetAnimation;
   /**
-   * Animation duration in milliseconds.
-   * @default 220
+   * How long the exit takes, in milliseconds. The entrance is a spring, so it
+   * has no duration of its own.
+   * @default 160
    */
   animationDuration?: number;
   /**
-   * Swipe the toast horizontally (or toward the nearest screen edge) to
-   * dismiss it.
+   * Drag the toast away to dismiss it: sideways in either direction, or
+   * toward its own edge. Only the front toast takes the gesture — the ones
+   * behind it are covered.
    * @default true
    */
   swipeToDismiss?: boolean;
+  /**
+   * How much of each toast behind this one peeks out past it.
+   * @default 14
+   */
+  stackPeek?: number;
+  /**
+   * How much smaller each toast behind this one is drawn.
+   * @default 0.05
+   */
+  stackScaleStep?: number;
+  /**
+   * How many toasts the stack shows. Deeper ones fade out where the last
+   * visible one sits rather than climbing further up the screen, so a long
+   * run of toasts stays a stack of this many instead of a ladder.
+   * @default 3
+   */
+  maxVisible?: number;
 };
 
-const SWIPE_DISTANCE = 56;
-const SWIPE_VELOCITY = 0.5;
+/** Past this, a release is a dismissal rather than a nudge. */
+const DISMISS_DISTANCE = 56;
+/** Points per second — gesture-handler reports velocity per second. */
+const DISMISS_VELOCITY = 800;
+/** How far outside its edge a toast starts, before the spring pulls it in. */
+const ENTER_OFFSET = 200;
+/** How small it starts. */
+const HIDDEN_SCALE = 0.7;
+const FADE_IN_MS = 200;
+/** A toast on its way out sinks a little as it fades. */
+const EXIT_DROP = 40;
+/** Swiping it out follows the finger further. */
+const SWIPE_EXIT_DROP = 80;
+/** How far a drag against the dismiss direction can get. */
+const RUBBER_BAND = 48;
+/** How far a toast swiped sideways is thrown before it is gone. */
+const FLING_X = 400;
+/** Front toast paints over the ones behind it. */
+const STACK_Z = 1000;
+
+const STACK_SPRING = { damping: 22, stiffness: 220, mass: 0.7 } as const;
+const SETTLE_SPRING = { damping: 18, stiffness: 200, mass: 0.6 } as const;
+
+/**
+ * Resistance for a drag heading the wrong way: asymptotes at `limit`, so the
+ * toast gives a little and then stops rather than following the finger.
+ */
+const resist = (offset: number, limit: number) => {
+  "worklet";
+  return offset / (1 + Math.abs(offset) / limit);
+};
+
+/** Enter offset and scale per preset; the exit is the same for all of them. */
+const PRESETS: Record<ToastPresetAnimation, { offset: number; scale: number }> =
+  {
+    spring: { offset: ENTER_OFFSET, scale: HIDDEN_SCALE },
+    slide: { offset: 16, scale: 1 },
+    zoom: { offset: 0, scale: 0.85 },
+    fade: { offset: 0, scale: 1 },
+    none: { offset: 0, scale: 1 },
+  };
 
 export const Root = ({
   toast,
   children,
   style,
-  presetAnimation = "slide",
-  animationDuration = 220,
+  presetAnimation = "spring",
+  animationDuration = 160,
   swipeToDismiss = true,
+  stackPeek = 14,
+  stackScaleStep = 0.05,
+  maxVisible = 3,
   ...rest
 }: ToastRootProps) => {
   const context = useContext(ToastContext);
-  const { position } = useContext(ViewportContext);
-  const progress = useRef(
-    new Animated.Value(presetAnimation === "none" ? 1 : 0),
-  ).current;
+  const {
+    towardsTop,
+    alignItems,
+    edgeMain,
+    edgeLeft,
+    edgeRight,
+    expandable,
+    expanded,
+    toggleExpanded,
+    expandedGap,
+    heights,
+    reportHeight,
+  } = useContext(ViewportContext);
+  const toasts = context?.toasts;
 
-  // Swipe-to-dismiss gesture. The pan transform lives on an outer wrapper so
-  // it composes with the enter/exit animation on the inner view.
-  const pan = useRef(new Animated.ValueXY()).current;
-  const gestureConfig = useRef({ position, swipeToDismiss, id: toast.id });
-  gestureConfig.current = { position, swipeToDismiss, id: toast.id };
+  // Which way is "away from the edge the stack is anchored to". Everything
+  // directional below is written once, in terms of this.
+  const dir = towardsTop ? -1 : 1;
+
+  // Depth counts the toasts in front of this one that are *not* leaving. A
+  // toast starts its exit the moment `close` runs, and from that moment it
+  // holds no place in the stack — so the ones behind it spring forward while
+  // it is still fading, instead of waiting for it to be removed.
+  const depth = useMemo(
+    () => (toasts ? stackDepthOf(toasts, toast.id) : 0),
+    [toasts, toast.id],
+  );
+  const closing = toast.state === "closing";
+  const isFront = depth === 0;
+
+  // Everything below runs on the UI thread: the drag tracks the finger without
+  // a round trip through JS, and a busy JS thread cannot stutter it.
+  const progress = useSharedValue(presetAnimation === "none" ? 1 : 0);
+  const opacity = useSharedValue(presetAnimation === "none" ? 1 : 0);
+  const exitDrop = useSharedValue(0);
+  const dragX = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  // Where this toast sits once the stack is open: past everything in front of
+  // it. Collapsed, `slot` and a fixed peek are all it takes.
+  const expandedOffset = useMemo(
+    () => (toasts ? stackOffsetOf(toasts, toast.id, heights, expandedGap) : 0),
+    [toasts, toast.id, heights, expandedGap],
+  );
+  const liveCount = useMemo(
+    () =>
+      toasts?.reduce(
+        (n, entry) => (entry.state === "closing" ? n : n + 1),
+        0,
+      ) ?? 0,
+    [toasts],
+  );
+
+  const { slot, buried } = stackSlotOf(depth, maxVisible);
+  const stackDepth = useSharedValue(slot);
+  const stackOpacity = useSharedValue(buried ? 0 : 1);
+  const expansion = useSharedValue(expanded ? 1 : 0);
+  const expandedY = useSharedValue(expandedOffset);
+  /**
+   * Which axis carried the dismissal, so the exit knows how to see it out:
+   * 0 nothing (a timeout or the close button), 1 sideways, 2 toward the edge.
+   */
+  const swipedAxis = useSharedValue(0);
+
+  // Worklets need stable callables, so the changing closures live in one ref
+  // and these thin wrappers are what `runOnJS` sees.
+  const actions = useRef({
+    hold: (_kind: "touch" | "hover" | "expand", _active: boolean) => {},
+    close: () => {},
+    finalize: () => {},
+    toggle: () => {},
+  });
+
   // The countdown is held while the toast is under a finger (or, on web, a
-  // hovering or dragging mouse) so it cannot vanish mid-interaction. Touch
-  // and hover are tracked separately and the manager is only told about the
-  // combined state, so lifting a finger does not resume a toast that is still
-  // hovered. Raw `onTouch*` rather than the responder callbacks: those only
-  // fire once the pan takes over, but a plain press on a child button must
-  // hold the timer too. The responder's grant/release cover the web mouse,
-  // which fires no touch events.
-  const holds = useRef({ touch: false, hover: false });
-  const hold = (kind: "touch" | "hover", active: boolean) => {
-    const before = holds.current.touch || holds.current.hover;
+  // hovering mouse) so it cannot vanish mid-interaction. Touch and hover are
+  // tracked separately and the manager is only told about the combined state,
+  // so lifting a finger does not resume a toast that is still hovered.
+  const holds = useRef({ touch: false, hover: false, expand: false });
+  const anyHold = () =>
+    holds.current.touch || holds.current.hover || holds.current.expand;
+  actions.current.hold = (kind, active) => {
+    const before = anyHold();
     holds.current[kind] = active;
-    const after = holds.current.touch || holds.current.hover;
+    const after = anyHold();
     if (before === after) return;
-    if (after) context?.manager.pause(gestureConfig.current.id);
-    else context?.manager.resume(gestureConfig.current.id);
+    if (after) context?.manager.pause(toast.id);
+    else context?.manager.resume(toast.id);
   };
-  const holdRef = useRef(hold);
-  holdRef.current = hold;
-  // A Root taken down mid-touch (its viewport unmounting under a finger)
-  // would otherwise leave its id held for good — and ids are reused.
+  actions.current.close = () => context?.manager.close(toast.id);
+  actions.current.finalize = () => context?.manager.finalize(toast.id);
+  actions.current.toggle = () => toggleExpanded();
+
+  const holdTouch = useCallback(
+    (active: boolean) => actions.current.hold("touch", active),
+    [],
+  );
+  const closeSelf = useCallback(() => actions.current.close(), []);
+  const finalizeSelf = useCallback(() => actions.current.finalize(), []);
+  const toggleStack = useCallback(() => actions.current.toggle(), []);
+
+  // A Root taken down mid-touch (its viewport unmounting under a finger) would
+  // otherwise leave its id held for good — and ids are reused.
   useEffect(
     () => () => {
-      holdRef.current("touch", false);
-      holdRef.current("hover", false);
+      actions.current.hold("touch", false);
+      actions.current.hold("hover", false);
+      actions.current.hold("expand", false);
+      reportHeight(toast.id, null);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_event, gesture) =>
-        gestureConfig.current.swipeToDismiss &&
-        (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8),
-      onPanResponderGrant: () => holdRef.current("touch", true),
-      onPanResponderMove: (_event, gesture) => {
-        // Vertical movement is only allowed toward the nearest screen edge.
-        const towardsTop = gestureConfig.current.position.startsWith("top");
-        const dy = towardsTop
-          ? Math.min(gesture.dy, 0)
-          : Math.max(gesture.dy, 0);
-        pan.setValue({ x: gesture.dx, y: dy });
-      },
-      onPanResponderRelease: (_event, gesture) => {
-        const towardsTop = gestureConfig.current.position.startsWith("top");
-        const edgeDy = towardsTop ? -gesture.dy : gesture.dy;
-        const edgeVy = towardsTop ? -gesture.vy : gesture.vy;
-        const flungX =
-          Math.abs(gesture.dx) > SWIPE_DISTANCE ||
-          Math.abs(gesture.vx) > SWIPE_VELOCITY;
-        const flungY = edgeDy > SWIPE_DISTANCE || edgeVy > SWIPE_VELOCITY;
-        if (flungX || flungY) {
-          // Fly out along the dominant direction while the standard closing
-          // animation fades it; the manager promotes the next queued toast.
-          const exit = flungX
-            ? { x: gesture.dx < 0 ? -400 : 400, y: gesture.dy }
-            : { x: gesture.dx, y: towardsTop ? -200 : 200 };
-          Animated.timing(pan, {
-            toValue: exit,
-            duration: 160,
-            useNativeDriver: false,
-          }).start();
-          context?.manager.close(gestureConfig.current.id);
-        } else {
-          Animated.spring(pan, {
-            toValue: { x: 0, y: 0 },
-            useNativeDriver: false,
-            bounciness: 6,
-          }).start();
-        }
-        holdRef.current("touch", false);
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(pan, {
-          toValue: { x: 0, y: 0 },
-          useNativeDriver: false,
-          bounciness: 6,
-        }).start();
-        holdRef.current("touch", false);
-      },
-    }),
-  ).current;
-
-  const interactionHandlers = {
-    onTouchStart: () => holdRef.current("touch", true),
-    onTouchEnd: () => holdRef.current("touch", false),
-    onTouchCancel: () => holdRef.current("touch", false),
-    ...(Platform.OS === "web"
-      ? {
-          onMouseEnter: () => holdRef.current("hover", true),
-          onMouseLeave: () => holdRef.current("hover", false),
-        }
-      : null),
-  };
+  // An open stack is being read, so nothing in it should time out underneath
+  // the reader.
+  useEffect(() => {
+    actions.current.hold("expand", expanded);
+  }, [expanded]);
 
   // One effect for both directions: entering on mount, leaving when the
   // manager marks the toast closing — and entering again if the same id is
   // re-added while that exit animation is still running.
-  const closing = toast.state === "closing";
   useEffect(() => {
-    if (!closing) {
-      pan.setValue({ x: 0, y: 0 });
-    }
     if (presetAnimation === "none") {
-      if (closing) context?.manager.finalize(toast.id);
+      if (closing) finalizeSelf();
       return;
     }
-    Animated.timing(progress, {
-      toValue: closing ? 0 : 1,
-      duration: animationDuration,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      // An interrupted exit means the toast came back; leave it alone.
-      if (closing && finished) context?.manager.finalize(toast.id);
-    });
+    if (closing) {
+      // The exit does not run the entrance backwards: it fades and sinks on a
+      // fixed curve, so a toast dismissed mid-spring still leaves cleanly. A
+      // toast swiped sideways is already on its way out along X, so it does
+      // not sink as well.
+      const axis = swipedAxis.value;
+      const drop =
+        !isFront || axis === 1 ? 0 : axis === 2 ? SWIPE_EXIT_DROP : EXIT_DROP;
+      const timing = {
+        duration: animationDuration,
+        easing: Easing.bezier(0.23, 1, 0.32, 1),
+      };
+      exitDrop.value = withTiming(dir * drop, timing);
+      opacity.value = withTiming(0, timing, (finished) => {
+        "worklet";
+        // An interrupted exit means the toast came back; leave it alone.
+        if (finished) runOnJS(finalizeSelf)();
+      });
+      return;
+    }
+    swipedAxis.value = 0;
+    exitDrop.value = withTiming(0, { duration: animationDuration });
+    dragX.value = withSpring(0, SETTLE_SPRING);
+    dragY.value = withSpring(0, SETTLE_SPRING);
+    opacity.value = withTiming(1, { duration: FADE_IN_MS });
+    progress.value = withSpring(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closing]);
 
-  const slideFrom = position.startsWith("top") ? -16 : 16;
-  const animatedStyle =
-    presetAnimation === "none"
-      ? undefined
-      : {
-          opacity: progress,
-          transform: [
-            ...(presetAnimation === "slide"
-              ? [
-                  {
-                    translateY: progress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [slideFrom, 0],
-                    }),
-                  },
-                ]
-              : []),
-            ...(presetAnimation === "zoom"
-              ? [
-                  {
-                    scale: progress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.85, 1],
-                    }),
-                  },
-                ]
-              : []),
-          ],
-        };
+  // Moving forward in the stack is a spring, so a toast leaving the front
+  // hands its place over rather than snapping.
+  useEffect(() => {
+    stackDepth.value = withSpring(slot, STACK_SPRING);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slot]);
+
+  // Falling past the last visible slot is a fade, not a move. Opening the
+  // stack does not bring it back: what opens out is the stack you can see, so
+  // the same `maxVisible` toasts are on screen either way.
+  useEffect(() => {
+    stackOpacity.value = withTiming(buried ? 0 : 1, { duration: FADE_IN_MS });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buried]);
+
+  // Opening and closing the stack, and keeping the open layout up to date as
+  // toasts come and go, are both springs.
+  useEffect(() => {
+    expansion.value = withSpring(expanded ? 1 : 0, STACK_SPRING);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
+  useEffect(() => {
+    expandedY.value = withSpring(expandedOffset, STACK_SPRING);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedOffset]);
+
+  const enter = PRESETS[presetAnimation];
+  const animated = useAnimatedStyle(() => {
+    const p = progress.value;
+    const d = stackDepth.value;
+    const e = expansion.value;
+    return {
+      opacity: opacity.value * stackOpacity.value,
+      transform: [
+        { translateX: dragX.value },
+        {
+          translateY:
+            // Still coming in, placed by the stack — a peek back when closed,
+            // clear of the ones in front when open — dragged, sinking out.
+            (1 - p) * enter.offset * dir +
+            (-d * stackPeek * (1 - e) - expandedY.value * e) * dir +
+            dragY.value +
+            exitDrop.value,
+        },
+        {
+          scale:
+            (enter.scale + (1 - enter.scale) * p) *
+            // Open, every toast is drawn at its own size.
+            (1 - d * stackScaleStep * (1 - e)),
+        },
+      ],
+    };
+  });
+
+  const pan = Gesture.Pan()
+    // Collapsed, only the toast in front is reachable — the rest are covered.
+    // Open, every toast the stack shows is; the ones the cap hid still are not.
+    .enabled(swipeToDismiss && (isFront || (expanded && !buried)) && !closing)
+    .minDistance(8)
+    // Touch down, before the pan has claimed the gesture: a plain press on a
+    // button inside the toast has to hold the countdown too.
+    .onBegin(() => {
+      runOnJS(holdTouch)(true);
+    })
+    .onUpdate((event) => {
+      // Sideways is a dismissal either way, so the toast just follows the
+      // finger. Vertically only its own edge is a way out: the other way it
+      // gives a little and stops.
+      dragX.value = event.translationX;
+      const towardEdge = event.translationY * dir;
+      dragY.value =
+        dir * (towardEdge >= 0 ? towardEdge : resist(towardEdge, RUBBER_BAND));
+    })
+    .onEnd((event) => {
+      const sideways = Math.abs(event.translationX);
+      const towardEdge = event.translationY * dir;
+      const flungX =
+        sideways > DISMISS_DISTANCE ||
+        Math.abs(event.velocityX) > DISMISS_VELOCITY;
+      const flungY =
+        towardEdge > DISMISS_DISTANCE ||
+        event.velocityY * dir > DISMISS_VELOCITY;
+      // Both at once happens on a diagonal flick; the axis the finger
+      // actually travelled further along is the one that wins.
+      if (flungX && (!flungY || sideways > towardEdge)) {
+        swipedAxis.value = 1;
+        dragX.value = withTiming(event.translationX < 0 ? -FLING_X : FLING_X, {
+          duration: animationDuration,
+        });
+        dragY.value = withSpring(0, SETTLE_SPRING);
+        runOnJS(closeSelf)();
+      } else if (flungY) {
+        swipedAxis.value = 2;
+        dragX.value = withSpring(0, SETTLE_SPRING);
+        runOnJS(closeSelf)();
+      } else {
+        dragX.value = withSpring(0, SETTLE_SPRING);
+        dragY.value = withSpring(0, SETTLE_SPRING);
+      }
+    })
+    .onFinalize(() => {
+      runOnJS(holdTouch)(false);
+    });
+
+  // A tap only means "open the stack" when there is a stack to open. Pan wins
+  // the pair, so a drag never doubles as a tap.
+  const tap = Gesture.Tap()
+    .enabled(expandable && liveCount > 1 && !closing)
+    .maxDuration(300)
+    .onEnd((_event, success) => {
+      if (success) runOnJS(toggleStack)();
+    });
+  const gesture = Gesture.Exclusive(pan, tap);
+
+  const hoverHandlers =
+    Platform.OS === "web"
+      ? {
+          onMouseEnter: () => actions.current.hold("hover", true),
+          onMouseLeave: () => actions.current.hold("hover", false),
+        }
+      : null;
 
   return (
     <ToastItemContext.Provider value={toast}>
-      <Animated.View
-        {...interactionHandlers}
-        {...(swipeToDismiss ? panResponder.panHandlers : {})}
-        style={
-          {
-            transform: [{ translateX: pan.x }, { translateY: pan.y }],
-            // Prevent text selection from hijacking mouse drags on web.
-            userSelect: "none",
-          } as any
-        }
-      >
-        <Animated.View style={[style, animatedStyle]} {...rest}>
-          {children}
+      <GestureDetector gesture={gesture}>
+        <Animated.View
+          {...hoverHandlers}
+          onLayout={(event) =>
+            reportHeight(toast.id, event.nativeEvent.layout.height)
+          }
+          style={[
+            {
+              position: "absolute",
+              left: edgeLeft,
+              right: edgeRight,
+              ...(towardsTop ? { top: edgeMain } : { bottom: edgeMain }),
+              alignItems,
+              zIndex: STACK_Z - depth,
+              // Scaling a card in a stack has to keep the edge it is anchored
+              // to still; the default centre origin would drift it.
+              transformOrigin: towardsTop ? "50% 0%" : "50% 100%",
+              // Prevent text selection from hijacking mouse drags on web.
+              // `userSelect` is web-only and absent from RN's ViewStyle.
+              ...(Platform.OS === "web" ? { userSelect: "none" } : null),
+            } as unknown as ViewStyle,
+            animated,
+          ]}
+        >
+          <View style={style} {...rest}>
+            {children}
+          </View>
         </Animated.View>
-      </Animated.View>
+      </GestureDetector>
     </ToastItemContext.Provider>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Parts
 
 const useToastItem = () => {
   const toast = useContext(ToastItemContext);

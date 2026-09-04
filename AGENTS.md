@@ -37,12 +37,12 @@ that do not name the cause:
 `yarn test` is deliberately **not** on the `expo-module-scripts` jest preset:
 that preset needs `babel-preset-expo` and `expo` at the package root, which
 this library does not otherwise depend on. It is plain `ts-jest` in a node
-environment instead, and the test mocks `react-native` hollow — enough for the
-toast manager, which is pure JS. Anything that renders a component will need
-the real preset (and those dependencies) first. `expo-modules-core` is mocked
-too, and has to be: it publishes untranspiled TypeScript and jest transforms
-nothing under `node_modules`, so merely not using it stops being enough once
-anything in the import graph reaches it.
+environment instead, and it needs no mocks because the only thing it imports is
+`src/toast-manager.ts` — pure JS, no react-native. Anything that renders a
+component will need the real preset (and `babel-preset-expo` plus `expo` at the
+package root) first. Note that `expo-modules-core` and `react-native-reanimated`
+both publish untranspiled TypeScript, and jest transforms nothing under
+`node_modules`, so an import graph that reaches either one has to mock it.
 
 `yarn build` compiles without cleaning, so files deleted from `src/` linger in
 `build/`. That does not reach npm — `prepublishOnly` runs `expo-module clean`
@@ -114,6 +114,112 @@ content dismisses it.
 cannot express a 14×8 triangle. Android disables it and draws bubble, corners
 and arrow in `TooltipRootViewGroup`, positioning the arrow after the window is
 up — that is the only moment Balloon's edge clamping is knowable.
+
+## The toast stack
+
+The toasts are **absolutely positioned and overlapping**, each anchored to the
+same viewport edge — not children of a flex column. That is the whole reason the
+stack is stable: a toast finishing its exit animation frees no slot, so nothing
+it was sitting next to moves. A column had the opposite property, and the bug it
+produced is worth remembering — anchored to the bottom, a plain column gave the
+edge slot to the *oldest* toast, so a replacing toast was laid out one bubble
+too high and dropped as the toast it replaced animated out.
+
+Depth comes from the manager's order: `getToasts()` is newest-first, so a Root
+counts the entries ahead of its own id. It counts only the ones that are **not**
+closing, which is what makes the stack feel right — a toast gives up its place
+the moment `close` runs, so the ones behind it spring forward while it is still
+fading instead of waiting for `finalize`. Each step back peeks `stackPeek` past
+the toast in front and is `stackScaleStep` smaller, with `minStackScale` as a
+`maxVisible` slots: past the last one a toast parks in that slot and fades out
+there rather than climbing further from the edge, which is what keeps a long
+run of toasts a stack rather than a ladder — and what stops the scale from
+running down to nothing. `transformOrigin` is pinned to the anchored edge —
+scaling about the default centre would drift the edge the stack aligns on.
+
+The two rules with any real logic in them — `stackDepthOf` (who is in front,
+skipping the ones leaving) and `stackSlotOf` (which slot, and whether it is
+buried) — live in `src/toast-manager.ts` as pure functions so the jest suite
+covers them. Keep them there: everything left in the worklet is arithmetic.
+
+The enter/exit is deliberately asymmetric, following
+[rnmotion.dev's spring toast](https://rnmotion.dev/animations/spring-toast):
+the entrance springs in from `ENTER_OFFSET` past the edge at `HIDDEN_SCALE`,
+while the exit is a fixed 160ms bezier that fades and sinks. Running the
+entrance backwards would make a toast dismissed mid-spring leave at whatever
+speed the spring happened to be at.
+
+Consequences worth knowing before changing any of it:
+
+- The viewport **fills** its parent rather than hugging its toasts. An absolute
+  child's insets are measured from the padding box, so padding on the viewport
+  would not move the toasts; the edge spacing lives on each Root instead, which
+  is why `ToastViewportGeometry` carries resolved `edgeMain`/`edgeLeft`/
+  `edgeRight` rather than the raw insets.
+- `zIndex` is explicit (`STACK_Z - index`). Children render front-first, so
+  without it the toasts behind would paint over the front one.
+- Toasts of different heights make a slightly ragged stack, because nothing
+  clamps a background toast to the front one's height. sonner does clamp, which
+  needs a measure pass. Nothing dims by depth either — the reference animation
+  does not, and the cap keeps the raggedness to two background cards.
+- Only the front toast takes the pan gesture (`.enabled(… && isFront)`) — the
+  ones behind it are covered, so a drag there would be a drag on something the
+  user cannot see.
+- Two axes dismiss, and they are not symmetric: sideways works either way, but
+  vertically only the toast's own edge is a way out, so the other direction
+  goes through `resist()` and asymptotes instead of following the finger. A
+  diagonal flick that clears both thresholds goes with the axis the finger
+  travelled further along.
+- `swipedAxis` is how the exit knows what it is finishing: 0 for a timeout or
+  the close button (sink `EXIT_DROP`), 2 for an edge swipe (sink further), 1
+  for sideways (do not sink at all — the toast is already leaving along X, and
+  adding a drop reads as it falling over).
+
+## Opening the stack
+
+`expandable` puts a `Gesture.Tap` on each Root, composed as
+`Gesture.Exclusive(pan, tap)` so a drag never doubles as a tap. It is enabled
+only while more than one toast is up — a lone toast with a button in it should
+never have its press competing with an expand.
+
+That competition is the reason `expandable` is off by default: a GH tap on the
+wrapper and an RN `Pressable` inside the toast both see the same touch, and
+both fire. There is no way to ask GH "did a child handle this?", so the
+documented answer for interactive toasts is to leave the tap off and drive
+`expanded` yourself.
+
+Opening out needs **measured heights**: collapsed, a fixed `stackPeek` is
+enough because the toasts overlap, but open they have to clear each other.
+Each Root reports its own height from `onLayout` into the viewport's registry
+(and `null` on unmount, or the map grows for the life of the app);
+`stackOffsetOf` turns that into a distance from the edge. A toast whose height
+has not arrived yet contributes nothing and lands on the one in front until it
+does.
+
+Opening does **not** reveal what `maxVisible` hid — what opens out is the stack
+as drawn. A buried toast stays faded and stays unreachable by the pan.
+
+## Reanimated and Gesture Handler
+
+Both are peer dependencies, and only the toast needs them. The anchored popups
+animate natively on iOS/Android and through Base UI on web.
+
+- Reanimated 4 needs `react-native-worklets` as well, and its babel plugin.
+  `babel-preset-expo` adds `react-native-worklets/plugin` on its own when
+  worklets is installed, so the example's babel config says nothing about it.
+- Gesture Handler needs `GestureHandlerRootView` at the root of the app on
+  Android. The example wraps in `App.tsx`.
+- **Velocity units differ from PanResponder.** `PanResponder`'s `vx`/`vy` are
+  points per *millisecond*; Gesture Handler's `velocityX`/`velocityY` are per
+  *second*. The swipe threshold went from `0.5` to `500` for that reason —
+  carrying the old number over makes every flick a dismissal.
+- Worklets need stable callables, so the Root keeps its changing closures in one
+  `actions` ref and hands `runOnJS` thin wrappers that never change identity.
+
+`createToastManager` lives in `src/toast-manager.ts`, apart from the components
+in `src/toast.tsx`, precisely so the jest suite can import the scheduler without
+pulling in react-native, Reanimated or Gesture Handler. Keep it that way: the
+suite needs no mocks at all, and that is what keeps it off the jest-expo preset.
 
 ## The toast viewport's window overlay
 

@@ -1973,6 +1973,28 @@ PODS:
     - React-utils (= 0.86.2)
     - ReactNativeDependencies
   - ReactNativeDependencies (0.86.2)
+  - RNGestureHandler (2.32.0):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - RNReanimated (4.5.1):
     - hermes-engine
     - RCTRequired
@@ -2286,6 +2308,7 @@ DEPENDENCIES:
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - ReactNativeDependencies (from `../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)
+  - RNGestureHandler (from `../node_modules/react-native-gesture-handler`)
   - RNReanimated (from `../node_modules/react-native-reanimated`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNWorklets (from `../node_modules/react-native-worklets`)
@@ -2474,6 +2497,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon"
   ReactNativeDependencies:
     :podspec: "../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec"
+  RNGestureHandler:
+    :path: "../node_modules/react-native-gesture-handler"
   RNReanimated:
     :path: "../node_modules/react-native-reanimated"
   RNScreens:
@@ -2576,6 +2601,7 @@ SPEC CHECKSUMS:
   ReactCodegen: 3bbb7de19774794a7428ef623a7b777106cf3737
   ReactCommon: 9002f006f571256348994183f7d4387aa7cf84e8
   ReactNativeDependencies: 2bd6854ade79bf1b60586d1ab7813a389df1b6bf
+  RNGestureHandler: 92172e79df6e88e0e93b6341f9dcd8b5a02746ba
   RNReanimated: fcf6a8cdd698fb09a811a8d6c5bcfe36575d965d
   RNScreens: 7118cd7715c226856125b5bece3c4d9abec90356
   RNWorklets: 43af89f696342f91118a2f1f3a879056e2f47331

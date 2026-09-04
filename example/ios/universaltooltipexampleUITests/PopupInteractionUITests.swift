@@ -250,6 +250,88 @@ final class PopupInteractionUITests: XCTestCase {
     XCTAssertTrue(second.exists)
   }
 
+  /// A burst of distinct ids in replace mode must leave only the newest
+  /// toast on screen — not a stack, and not a blank hole after the exits.
+  func testReplaceBurstLeavesOnlyTheNewest() {
+    let replace = trigger("segment-replace")
+    scrollTo(replace)
+    replace.tap()
+
+    let button = trigger("demo-toast-burst")
+    scrollTo(button)
+    button.tap()
+    button.tap()
+    button.tap()
+
+    let newest = app.staticTexts["Message 3"]
+    XCTAssertTrue(
+      newest.waitForExistence(timeout: 2),
+      "The last toast in a replace burst never appeared."
+    )
+    Thread.sleep(forTimeInterval: 0.6)
+    XCTAssertFalse(
+      app.staticTexts["Message 1"].exists,
+      "An earlier toast was still up after its replace exit."
+    )
+    XCTAssertFalse(
+      app.staticTexts["Message 2"].exists,
+      "The middle toast was still up after its replace exit."
+    )
+    XCTAssertTrue(newest.exists)
+  }
+
+  /// `presentation="window"` exists so a toast raised from a React Native
+  /// `Modal` sits on the window, in front of that modal.
+  func testWindowToastAppearsAboveModal() {
+    let open = trigger("demo-toast-modal-open")
+    scrollTo(open)
+    open.tap()
+
+    XCTAssertTrue(
+      app.staticTexts["Inside a Modal"].waitForExistence(timeout: uiTimeout),
+      "The Modal did not open."
+    )
+
+    trigger("demo-toast-modal-raise").tap()
+
+    let toast = app.staticTexts["Raised from a Modal"].firstMatch
+    XCTAssertTrue(
+      toast.waitForExistence(timeout: uiTimeout),
+      "The window toast never appeared above the Modal."
+    )
+    XCTAssertTrue(
+      toast.isHittable,
+      "The toast is in the tree but not in front of the Modal."
+    )
+  }
+
+  /// The same toast with an inline viewport is painted in the React tree,
+  /// underneath the Modal's view controller.
+  func testInlineToastIsCoveredByModal() {
+    let inline = trigger("segment-inline")
+    scrollTo(inline)
+    inline.tap()
+
+    let open = trigger("demo-toast-modal-open")
+    scrollTo(open)
+    open.tap()
+    XCTAssertTrue(
+      app.staticTexts["Inside a Modal"].waitForExistence(timeout: uiTimeout),
+      "The Modal did not open."
+    )
+
+    trigger("demo-toast-modal-raise").tap()
+    Thread.sleep(forTimeInterval: 0.8)
+
+    let toast = app.staticTexts["Raised from a Modal"]
+    if toast.exists {
+      XCTAssertFalse(
+        toast.firstMatch.isHittable,
+        "An inline toast should sit behind the Modal."
+      )
+    }
+  }
+
   func testPopupSurvivesRepeatedOpenAndClose() {
     let bubble = app.staticTexts["Network available"]
     for pass in 1...3 {

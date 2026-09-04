@@ -38,13 +38,35 @@ presentation, scheduling and the platform differences underneath.
 - **A toast manager built for phones.** Visible limit with a `queue` or
   `replace` overflow policy, one-toast-per-id de-duplication, and countdowns
   that pause while the toast is under a finger or the app is in the background.
-  On iOS the viewport can own a window, so a toast raised from inside a `Modal`
-  shows *above* it instead of behind it.
+  Toasts stack the way sonner's do — the newest in front, the ones behind
+  scaled back and dimmed — and the stack drains from the back, so a burst of
+  taps does not mean waiting out every timeout. On iOS the viewport can own a
+  window, so a toast raised from inside a `Modal` shows _above_ it instead of
+  behind it.
+- **Animations and gestures on the UI thread.** Toast enter/exit, the stack
+  reflow and swipe-to-dismiss all run through Reanimated and Gesture Handler,
+  so a busy JS thread cannot stutter them.
 
 ## Install
 
 ```sh
 npx expo install poppo
+```
+
+Toasts need Reanimated and Gesture Handler:
+
+```sh
+npx expo install react-native-reanimated react-native-gesture-handler
+```
+
+and Gesture Handler has to wrap your app once, at the root:
+
+```tsx
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+
+<GestureHandlerRootView style={{ flex: 1 }}>
+  <App />
+</GestureHandlerRootView>;
 ```
 
 Web additionally needs the Base UI peer dependency:
@@ -278,12 +300,13 @@ Accepts every `View` prop.
 Creates the manager, or accepts one you made with `createToastManager()` via
 `toastManager` (useful for calling `add` from outside React).
 
-| Prop           | Type                   | Default   | Notes                                                                                  |
-| -------------- | ---------------------- | --------- | -------------------------------------------------------------------------------------- |
-| `timeout`      | `number`               | `5000`    | Auto-dismiss, ms. `0` keeps toasts until closed.                                       |
-| `limit`        | `number`               | `1`       | How many toasts are visible at once.                                                   |
-| `overflow`     | `"queue" \| "replace"` | `"queue"` | What happens to the next toast once `limit` is reached. See [Scheduling](#scheduling). |
-| `toastManager` | `ToastManager`         |           | An external manager; the props above are ignored when it is given.                     |
+| Prop             | Type                   | Default    | Notes                                                                                                                          |
+| ---------------- | ---------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `timeout`        | `number`               | `5000`     | Auto-dismiss, ms. `0` keeps toasts until closed.                                                                               |
+| `limit`          | `number`               | `Infinity` | How many toasts the manager keeps live. Nothing is held back by default — how many are _drawn_ is `Toast.Root`'s `maxVisible`. |
+| `overflow`       | `"queue" \| "replace"` | `"queue"`  | What happens to the next toast once `limit` is reached. See [Scheduling](#scheduling).                                         |
+| `demotedTimeout` | `number`               | `2000`     | Ceiling on what a toast has left once a newer one pushes it back in the stack. Only ever shortens.                             |
+| `toastManager`   | `ToastManager`         |            | An external manager; the props above are ignored when it is given.                                                             |
 
 ### `useToastManager()`
 
@@ -315,14 +338,62 @@ outside React or in tests:
 
 ### Parts
 
-| Part                                | Notes                                                                                                                                                                                        |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Toast.Viewport`                    | Where the toasts stack. `position`, `insets`, `presentation`, `style`. See [Placing the viewport](#placing-the-viewport).                                                                                    |
-| `Toast.Root`                        | One toast; takes the `toast` object. `presetAnimation` (`"slide" \| "fade" \| "zoom" \| "none"`, default `"slide"`), `animationDuration` (default `220`), `swipeToDismiss` (default `true`). |
-| `Toast.Title` / `Toast.Description` | `Text`s that fall back to the toast's own `title` / `description` when given no children. `Description` renders nothing when there is none.                                                  |
-| `Toast.Action` / `Toast.Close`      | `Pressable`s that close the toast, then call your `onPress`.                                                                                                                                 |
+| Part                                | Notes                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Toast.Viewport`                    | Where the toasts stack. `position`, `insets`, `presentation`, `style`. See [Placing the viewport](#placing-the-viewport).                                                                                                                                                                                                                        |
+| `Toast.Root`                        | One toast; takes the `toast` object. `presetAnimation` (`"spring" \| "slide" \| "fade" \| "zoom" \| "none"`, default `"spring"`), `animationDuration` — the exit only, since the entrance is a spring (default `160`), `swipeToDismiss` (default `true`), and the stack look: `maxVisible` (`3`), `stackPeek` (`14`), `stackScaleStep` (`0.05`). |
+| `Toast.Title` / `Toast.Description` | `Text`s that fall back to the toast's own `title` / `description` when given no children. `Description` renders nothing when there is none.                                                                                                                                                                                                      |
+| `Toast.Action` / `Toast.Close`      | `Pressable`s that close the toast, then call your `onPress`.                                                                                                                                                                                                                                                                                     |
 
 ### Scheduling
+
+The toasts are drawn as a stack: the newest sits in front at the anchored
+edge, and each one behind it peeks `stackPeek` points past it and is
+`stackScaleStep` smaller. `maxVisible` (3) of them show; a toast deeper than
+that fades out where the last visible one sits rather than climbing further up
+the screen, so a long run stays a stack of three rather than a ladder.
+
+They overlap rather than sharing a column, so a toast finishing its exit
+animation never shifts the ones that remain — and it gives up its place the
+moment it starts leaving, so the toasts behind it spring forward while it is
+still fading rather than after it is gone.
+
+### Opening the stack
+
+`expandable` on the viewport lets a tap spread the stack out into a list, so
+the toasts behind the front one can be read and dismissed. What opens out is
+the stack **as drawn** — the `maxVisible` toasts — not every toast the manager
+is holding. Each one moves clear of the ones in front of it, which takes their
+measured heights, plus `expandedGap` between them.
+
+| Prop                                                | Default |                                                              |
+| --------------------------------------------------- | ------- | ------------------------------------------------------------ |
+| `expandable`                                        | `false` | Turns the tap on. Only live while more than one toast is up. |
+| `expandedGap`                                       | `12`    | Room between the toasts once open.                           |
+| `expanded` / `defaultExpanded` / `onExpandedChange` |         | Own the open state instead.                                  |
+
+Every countdown is held while the stack is open, so nothing times out while it
+is being read, and an open stack that drains down to one toast closes itself.
+
+A tap reaches the toast's own children too, so if yours have buttons in them,
+leave `expandable` off and drive `expanded` from wherever you want the trigger
+to be.
+
+A toast enters by springing in from off its edge, and leaves on a short fixed
+curve — sinking a little as it fades, and carrying on the way it was thrown
+when it was swiped out.
+
+Only the front toast takes the gesture; the ones behind it are covered. Drag it
+**sideways in either direction**, or **toward its own edge**, past 56 points or
+800 points/second to dismiss it. Dragging _away_ from its edge gives a little
+and stops, since there is no way out that way. A diagonal flick goes with
+whichever axis the finger travelled further along.
+
+An older toast has its countdown capped at `demotedTimeout` as soon as a newer
+one arrives. Without that, four taps means sitting through four full timeouts
+before the stack clears; with it the back drains while the newest toast is
+still fresh. It only ever shortens a countdown, and a toast with `timeout: 0`
+is left alone — it asked to stay.
 
 At most `limit` toasts are visible. When another one arrives:
 
@@ -376,14 +447,14 @@ viewport into an overlay on the window itself, which a modal does not cover.
 <Toast.Viewport position="bottom" presentation="window" insets={insets} />
 ```
 
-| `presentation` | Behaviour |
-| --- | --- |
-| `"inline"` (default) | An absolutely positioned view in the React tree, bounded by its parent — like any other view. |
-| `"window"` | **iOS only.** An overlay on the window: not clipped by an ancestor, and raised above an open `Modal`. Falls back to `"inline"` on Android and web, with a warning in development. |
+| `presentation`       | Behaviour                                                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"inline"` (default) | An absolutely positioned view in the React tree, bounded by its parent — like any other view.                                                                                     |
+| `"window"`           | **iOS only.** An overlay on the window: not clipped by an ancestor, and raised above an open `Modal`. Falls back to `"inline"` on Android and web, with a warning in development. |
 
 Two things to know before switching:
 
-- **`position` starts measuring from the screen.** The overlay *is* the window,
+- **`position` starts measuring from the screen.** The overlay _is_ the window,
   so a viewport that used to be bounded by a screen sitting above a tab bar is
   now bounded by the display. Your `insets` are what keep it clear.
 - **A modal presented while a toast is already up still covers that toast.** The
