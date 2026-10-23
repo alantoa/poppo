@@ -231,6 +231,10 @@ export const createToastManager = (
   const promote = () => {
     while (queue.length > 0 && openToasts().length < limit) {
       const next = queue[0] as ToastObject;
+      // A closing toast can be queued again when its slot has already been
+      // promoted. Wait for that instance to finalize before showing its id a
+      // second time, or the old Root could finalize the new toast as well.
+      if (visible.some((toast) => toast.id === next.id)) break;
       queue = queue.slice(1);
       visible = [{ ...next, state: "open" }, ...visible];
       startTimer(next);
@@ -283,7 +287,47 @@ export const createToastManager = (
     // entries sharing an id, and `finalize` filters by id, so the old one
     // finishing its animation would take the new one with it.
     const visibleExisting = visible.find((toast) => toast.id === id);
+    const queuedExisting = queue.find((toast) => toast.id === id);
     if (visibleExisting) {
+      if (visibleExisting.state === "closing" && queuedExisting) {
+        // This id is already waiting for its exiting instance to finalize.
+        // Update the queued copy without creating another one.
+        visible = visible.map((toast) =>
+          toast.id === id
+            ? { ...toast, ...options, id, state: "closing" as const }
+            : toast,
+        );
+        queue = queue.map((toast) =>
+          toast.id === id
+            ? { ...toast, ...options, id, state: "open" as const }
+            : toast,
+        );
+        notify();
+        return id;
+      }
+
+      const open = openToasts();
+      if (visibleExisting.state === "closing" && open.length >= limit) {
+        if (overflow === "queue") {
+          // Its old slot has already been promoted. Keep the exiting instance
+          // until finalize, then show the refreshed toast through normal FIFO.
+          visible = visible.map((toast) =>
+            toast.id === id
+              ? { ...toast, ...options, id, state: "closing" as const }
+              : toast,
+          );
+          queue = [
+            ...queue,
+            { ...visibleExisting, ...options, id, state: "open" },
+          ];
+          notify();
+          return id;
+        }
+        // Replace mode gives the reopened toast priority, but still respects
+        // the configured live-toast limit.
+        close((open[open.length - 1] as ToastObject).id);
+      }
+
       clearFallback(id);
       visible = visible.map((toast) =>
         toast.id === id
@@ -294,7 +338,6 @@ export const createToastManager = (
       notify();
       return id;
     }
-    const queuedExisting = queue.find((toast) => toast.id === id);
     if (queuedExisting) {
       queue = queue.map((toast) =>
         toast.id === id ? { ...toast, ...options, id } : toast,
