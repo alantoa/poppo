@@ -81,6 +81,25 @@ describe("overflow: queue (default)", () => {
     expect(ids(manager)).toEqual(["a:closing"]);
   });
 
+  it("queues a re-added closing id until its promoted slot is free", () => {
+    const manager = createToastManager({ timeout: 0, limit: 1 });
+    manager.add({ id: "a" });
+    manager.add({ id: "b" });
+    manager.close("a");
+    manager.add({ id: "a", title: "returned" });
+    expect(ids(manager)).toEqual(["b:open", "a:closing"]);
+
+    // The queued copy must not be promoted while the old instance still
+    // exists, even when another toast closes first.
+    manager.close("b");
+    expect(ids(manager)).toEqual(["b:closing", "a:closing"]);
+    manager.finalize("a");
+    expect(ids(manager)).toEqual(["a:open", "b:closing"]);
+    expect(manager.getToasts()[0]?.title).toBe("returned");
+    manager.finalize("b");
+    expect(ids(manager)).toEqual(["a:open"]);
+  });
+
   it("closing an id that is still queued drops it silently", () => {
     const manager = createToastManager({ timeout: 1000, limit: 1 });
     manager.add({ id: "a" });
@@ -116,6 +135,24 @@ describe("overflow: replace", () => {
 
     manager.finalize("a");
     expect(ids(manager)).toEqual(["b:open"]);
+  });
+
+  it("keeps the limit when a closing id is reopened at capacity", () => {
+    const manager = createToastManager({
+      timeout: 0,
+      limit: 1,
+      overflow: "replace",
+    });
+    manager.add({ id: "a" });
+    manager.add({ id: "b" });
+    manager.add({ id: "a" });
+
+    expect(ids(manager)).toEqual(["b:closing", "a:open"]);
+    expect(
+      ids(manager).filter((entry) => entry.endsWith(":open")),
+    ).toHaveLength(1);
+    manager.finalize("b");
+    expect(ids(manager)).toEqual(["a:open"]);
   });
 
   it("never queues — a burst leaves only the newest", () => {
